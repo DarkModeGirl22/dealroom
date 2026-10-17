@@ -14,7 +14,9 @@ IMAGE = (".png", ".jpg", ".jpeg", ".webp")
 CHECK_PROMPT = (
     "You are the neutral witness in a deal between a freelancer and a client. These are the terms they both "
     "accepted:\n{terms}\n\nRequests the client made in the chat:\n{asks}\n\n"
-    "Look at the delivered image and check each requirement. Name each requirement in 2 to 5 words (for example: \"Blue background\"). Only describe what you can actually see. "
+    "Look at the delivered image and check each requirement the image itself can show (subject, colors, style, "
+    "text, size). Always check first that the image is the agreed item itself (a logo is a logo, not a portrait). A color "
+    "requirement means the main colors of the work: a small detail in that color (a collar, a button) is a no. Never check price, payment, revisions or deadlines. Name each requirement in 2 to 5 words (for example: \"Blue background\"). Only describe what you can actually see. "
     "Reply JSON only: {{\"seen\": one sentence describing the image, \"checks\": [{{\"requirement\": .., "
     "\"result\": \"yes\" or \"no\" or \"unclear\", \"evidence\": what in the image shows it}}]}}"
 )
@@ -23,7 +25,8 @@ CHECK_PROMPT = (
 PDF_PROMPT = (
     "You are the neutral witness in a deal between a freelancer and a client. These are the terms they both "
     "accepted:\n{terms}\n\nRequests the client made in the chat:\n{asks}\n\n"
-    "Below is the text of the delivered PDF ({pages} pages). Check each requirement against it. Name each requirement "
+    "Below is the text of the delivered PDF ({pages} pages). Check each requirement the document itself can show; "
+    "never check price, payment, revisions or deadlines. Name each requirement "
     "in 2 to 5 words (for example: \"Translated to English\"). Only judge what the text actually shows; if the text "
     "can't show it (a layout, an image), answer unclear. "
     "Reply JSON only: {{\"seen\": one sentence describing the document, \"checks\": [{{\"requirement\": .., "
@@ -59,6 +62,9 @@ def save(conn, room, person, upload) -> int | None:
     stored = db.UPLOADS / f"room{room['id']}-{sha[:12]}{Path(name).suffix.lower()}"
     stored.write_bytes(raw)
     did = db.insert(conn, "delivery", room_id=room["id"], filename=name, stored=str(stored), sha256=sha, ts=db.now())
+    # in the chat, like any messaging app: the file itself, from the person who sent it
+    db.insert(conn, "message", room_id=room["id"], sender_id=person["id"], kind="chat", text=f"📎 {name}",
+              data=json.dumps({"delivery_id": did}), ts=db.now())
     R.note(conn, room["id"], "info", f"{person['name']} delivered \"{name}\" ({len(raw) // 1024 or 1} KB, fingerprint "
                                      f"{sha[:10]}…). The client's download will be recorded.", {"delivery_id": did})
     check(conn, room, did)
@@ -72,7 +78,7 @@ def check(conn, room, did: int):
     if not d or not (path.endswith(IMAGE) or is_pdf) or not llm.available():
         return None
     t = T.latest(conn, room["id"])["data"]
-    terms = json.dumps({k: t.get(k) for k in ("item", "deliverables", "revisions")})
+    terms = json.dumps({k: t.get(k) for k in ("item", "deliverables")})   # what the file itself can show
     asks = "\n".join(f"- {a}" for a in [m["text"] for m in R.chat_text(conn, room["id"]) if m["role"] == "client"][-6:]) or "-"
     if is_pdf:
         text, pages = pdf_text(Path(d["stored"]))
@@ -84,6 +90,8 @@ def check(conn, room, did: int):
                       task="smart", max_tokens=700)
     else:
         out = llm.look(CHECK_PROMPT.format(terms=terms, asks=asks), Path(d["stored"]))
+        if not out or not isinstance(out.get("checks"), list):   # the vision model sometimes times out: one more try
+            out = llm.look(CHECK_PROMPT.format(terms=terms, asks=asks), Path(d["stored"]))
     if not out or not isinstance(out.get("checks"), list):
         return None
     checks = [c for c in out["checks"] if isinstance(c, dict) and c.get("requirement") and c.get("result") in ("yes", "no", "unclear")][:6]

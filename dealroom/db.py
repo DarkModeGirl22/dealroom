@@ -56,9 +56,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
-    for col in ("suggest TEXT", "parent_id INTEGER"):   # copies made before these columns existed
-        try:
-            conn.execute(f"ALTER TABLE room ADD COLUMN {col}")
+    for table, col in (("room", "suggest TEXT"), ("room", "parent_id INTEGER"), ("person", "seen_note INTEGER DEFAULT 0")):
+        try:   # copies made before these columns existed
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
     return conn

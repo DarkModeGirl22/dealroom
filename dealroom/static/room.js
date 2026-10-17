@@ -25,14 +25,14 @@
       lastDeal = m.deal;
     }
     const el = document.createElement('div');
-    if (m.kind === 'chat') {
-      el.className = 'msg ' + (m.sender_id === me ? 'mine' : 'theirs');
-      el.innerHTML = `<div class="from">${esc(m.sender)} <span>${time(m.ts)}</span></div><div class="body">${esc(m.text)}</div>`;
-    } else {
-      el.className = `note ${m.kind === 'private' ? 'priv' : ''} ${m.level || 'info'}`;
-      const tag = m.kind === 'private' ? 'Only you can see this' : 'DealRoom';
-      el.innerHTML = `<div class="tag">${tag} · ${time(m.ts)}</div><div class="body">${esc(m.text)}</div>`;
-    }
+    el.className = 'msg ' + (m.sender_id === me ? 'mine' : 'theirs');
+    const did = m.data && m.data.delivery_id;
+    const body = did   // a delivered file, shown like any chat attachment; opening it is recorded
+      ? `<a class="attachment" href="/r/${m.room_id}/file/${did}?as=${as}" target="_blank">
+           <span class="ficon" aria-hidden="true">${/\.pdf$/i.test(m.text) ? 'PDF' : 'IMG'}</span>
+           <span><strong>${esc(m.text.replace(/^📎\s*/, ''))}</strong><span class="hint">Open the file</span></span></a>`
+      : `<div class="body">${esc(m.text)}</div>`;
+    el.innerHTML = `<div class="from">${esc(m.sender)} <span>${time(m.ts)}</span></div>${body}`;
     feed.appendChild(el);
   }
 
@@ -46,6 +46,7 @@
       feed.dataset.multi = d.multi ? '1' : '0';
       d.messages.forEach(m => { render(m); last = Math.max(last, m.id); });
       if (d.messages.length && (atBottom || last === d.messages.at(-1).id)) feed.scrollTop = feed.scrollHeight;
+      if (window.dealroomNotes) window.dealroomNotes(d.notes, d.unread);
       if (card.dataset.html !== d.card && !card.dataset.hold) { card.dataset.html = d.card; card.innerHTML = d.card; buttons(); }
     } catch (e) { /* offline for a moment: next poll retries */ }
     busy = false;

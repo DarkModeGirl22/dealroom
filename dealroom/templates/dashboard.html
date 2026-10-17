@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}: {{ 'My business' if me.role == 'freelancer' else 'My purchases' }}{% endblock %}
+{% block bodyclass %}dash-page{% endblock %}
+{% block topright %}{% set page = 'dash' %}{% include "_account.html" %}{% endblock %}
+{% block content %}
+<div id="dash-root" data-as="{{ me.key }}" data-role="{{ me.role }}"></div>
+<script src="{{ url_for('static', filename='notify.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='dash/dash.css') }}">
+<script type="module" src="{{ url_for('static', filename='dash/dash.js') }}"></script>
+{% endblock %}

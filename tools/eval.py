@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["DEALROOM_DATA_DIR"] = tempfile.mkdtemp(prefix="dealroom-eval-")
 
-from dealroom import db, disputes as X, llm, protect as P, room as R, terms as T, watch as WA  # noqa: E402
+from dealroom import db, disputes as X, llm, protect as P, room as R, terms as T, watch as WA, world as WO  # noqa: E402
 
 # chats with the terms they really agreed on: (lines, price, deposit, revisions, deadline word)
 CHATS = [
@@ -170,10 +170,8 @@ def eval_reports(log, runs=3):
     kept = removed = 0
     supports = []
     for _ in range(runs):
-        R.seed(conn, "wrong")
-        rm = R.get(conn, 1)
-        alex, maya = R.person(conn, "alex"), R.person(conn, "maya")
-        X.open_dispute(conn, rm, alex, "not_received", "I never received the file")
+        WO.seed(conn)   # Jordan's podcast cover: paid, delivered, downloaded, then "I never received the file"
+        rm = R.get(conn, db.one(conn, "SELECT id FROM room WHERE title='Podcast cover'")["id"])
         ev = X.timeline(conn, rm)
         events = {e["id"]: e for e in ev}
         lines = "\n".join(f"[{e['id']}] {e['ts']} · {e['what']} (source: {e['src']})" for e in ev)

@@ -85,10 +85,12 @@ def check(conn, room, msg_id: int, sender) -> str | None:
         kind = "change"
     if kind == "agreed" or kind == "change" and t and not under_way(conn, room):
         why = "Your chat now has the work and a price" if not t else "The chat changed the deal"
-        if T.draft(conn, room["id"], why=why, only_if_changed=bool(t)):
+        if T.draft(conn, room["id"], why=why, only_if_changed=bool(t), need_price=True):
             return "drafted"
         return None
-    if kind in ("change", "asked") and t and under_way(conn, room):
+    if kind in ("change", "asked") and t and under_way(conn, room) and R.side(room, sender) == "client" \
+            and not db.one(conn, "SELECT 1 FROM message WHERE room_id=? AND kind='note' AND text LIKE 'This deal is already under way%'",
+                           room["id"]):   # said once per deal, to the person asking
         rev = t["data"].get("revisions")
         R.note(conn, room["id"], "info", "This deal is already under way, so its terms stay as agreed. A fix to the same "
                "work uses one of the revisions" + (f" ({rev} included)" if rev is not None else "") +

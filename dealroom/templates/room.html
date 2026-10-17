@@ -1,15 +1,7 @@
 {% extends "base.html" %}
 {% block title %}: {{ other.name }}{% endblock %}
-{% block topright %}
-<nav class="switch" aria-label="Whose side you see">
-  {% for key, name, role in [(room.freelancer_key, room.freelancer, 'freelancer'), (room.client_key, room.client, 'client')] %}
-  <a href="{{ url_for('room_page', room_id=room.id, **{'as': key}) }}" class="{{ 'on' if key == me.key }}" {{ 'aria-current=page' if key == me.key }}>
-    {{ name }} <span>{{ role }}</span></a>
-  {% endfor %}
-</nav>
-{% endblock %}
+{% block topright %}{% set page = 'chats' %}{% set home_room = room.id %}{% include "_account.html" %}{% endblock %}
 {% block content %}
-{% if story %}<p class="story-line"><strong>{{ story.title }}.</strong> {{ story.line }}</p>{% endif %}
 <div class="layout" data-room="{{ room.id }}" data-as="{{ me.key }}" data-me="{{ me.id }}">
   <nav class="chats panel" aria-label="Conversations">
     <h2>Chats</h2>
@@ -17,14 +9,17 @@
       {% for c in chats %}
       <li><a href="{{ url_for('room_page', room_id=c.room.id, **{'as': me.key}) }}" class="{{ 'on' if c.other.id == other.id }}">
         <span class="avatar" aria-hidden="true">{{ c.other.name[0] }}</span>
-        <span class="who"><strong>{{ c.other.name }}{% if c.deals > 1 %} <span class="deals-n">· {{ c.deals }} deals</span>{% endif %}</strong>
+        <span class="who"><strong>{{ c.other.name }}{% if c.deals > 1 %} <span class="deals-n">{{ c.deals }} deals</span>{% endif %}</strong>
           <span class="last">{{ c.last or c.room.title }}</span></span>
       </a></li>
       {% endfor %}
     </ul>
   </nav>
   <section class="chat panel">
-    <h2>{{ other.name }} <span class="muted">· {{ other.role }}</span></h2>
+    <header class="chat-head">
+      <span class="avatar" aria-hidden="true">{{ other.name[0] }}</span>
+      <div><strong>{{ other.name }}</strong><span class="muted small"> {{ other.role }}{% if ai_other %}, played by NVIDIA Nemotron{% endif %}</span></div>
+    </header>
     <div id="feed" class="feed" aria-live="polite"></div>
     <div id="private" class="private" hidden></div>
     <form id="say" class="say" autocomplete="off">
@@ -35,5 +30,6 @@
   <aside class="card panel" id="card" aria-label="Deal card"></aside>
 </div>
 {% if side == 'client' and paypal_client_id %}<script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=USD&intent=capture&components=buttons&disable-funding=paylater,venmo,card"></script>{% endif %}
+<script src="{{ url_for('static', filename='notify.js') }}"></script>
 <script src="{{ url_for('static', filename='room.js') }}"></script>
 {% endblock %}

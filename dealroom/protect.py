@@ -45,17 +45,32 @@ CLASSIFY = (
 )
 
 
+def _said_lately(conn, room_id, text: str, only_for=None, window: int = 15) -> bool:
+    """The same warning in the last few messages of this deal: once is a warning, ten times is noise."""
+    rows = db.all_(conn, "SELECT text, only_for FROM message WHERE room_id=? ORDER BY id DESC LIMIT ?", room_id, window)
+    return any(r["text"] == text and r["only_for"] == only_for for r in rows)
+
+
+def _warn(conn, room, level, text, only_for=None):
+    if not _said_lately(conn, room["id"], text, only_for):
+        R.note(conn, room["id"], level, text, only_for=only_for)
+
+
+OFF_WARNING = ("Payments and messages outside this room aren't protected or recorded. Pay only with the PayPal button "
+               "on the deal card; it's the only payment DealRoom can prove.")
+REFUND_WARNING = ("Never send money back by hand. If anything was overpaid, DealRoom refunds it only to the original "
+                  "PayPal payment, so it can't be reversed later.")
+
+
 def scan(conn, room, sender, text: str):
-    """After a message is sent: a shared, calm warning when it carries a known scam signal."""
-    if OFF_PLATFORM.search(text):
-        R.note(conn, room["id"], "warn", "Payments and messages outside this room aren't protected or recorded. "
-               "Pay only with the PayPal button on the deal card; it's the only payment DealRoom can prove.")
-    elif REFUND_ASK.search(text) and R.side(room, sender) == "client":
-        R.note(conn, room["id"], "warn", "Never send money back by hand. If anything was overpaid, DealRoom refunds it "
-               "only to the original PayPal payment, so it can't be reversed later.")
+    """After a message is sent: a shared, calm warning when it carries a known scam signal (not repeated every time)."""
+    if REFUND_ASK.search(text) or re.search(r"refund.{0,40}(?:wallet|address|wise|revolut|crypto|btc)", text, re.I):
+        _warn(conn, room, "warn", REFUND_WARNING)
+    elif OFF_PLATFORM.search(text):
+        _warn(conn, room, "warn", OFF_WARNING)
     elif LINK.search(text):
-        R.note(conn, room["id"], "info", "A link was shared. DealRoom never asks you to log in or pay through a link; "
-               "real invoices and payments only appear on the deal card.", only_for=R.other(conn, room, sender)["id"])
+        _warn(conn, room, "info", "A link was shared. DealRoom never asks you to log in or pay through a link; "
+              "real invoices and payments only appear on the deal card.", only_for=R.other(conn, room, sender)["id"])
 
 
 def facts(conn, room) -> dict:
@@ -70,6 +85,7 @@ DONE = re.compile(r"\b(?:already|yesterday|last (?:night|week)|this morning|just
 
 
 def _claims(text: str) -> set:
+    text = text.replace("\u2019", "'").replace("\u2018", "'")
     if not CLAIMS.search(text):
         return set()
     out = llm.ask(CLASSIFY, text, task="smart", max_tokens=120) if llm.available() else None
@@ -136,10 +152,10 @@ def after_claim(conn, room, person, text: str):
     msg = ("Facts from the record, for both of you: " + "; ".join(b for _, b in lines) +
            ". If something is still wrong, say exactly what, so it can be fixed here.")
     said = db.one(conn, "SELECT 1 FROM message WHERE room_id=? AND kind='note' AND text=?", room["id"], msg)
-    if said:   # the same facts were already shown: don't repeat them, point to the next step
+    if said:   # the same facts were already shown: don't repeat them, point to the next step (once)
         if R.side(room, person) == "client":
-            R.note(conn, room["id"], "info", "These facts are already in the room. If you still disagree, use "
-                   "\"Report a problem to PayPal\" on the deal card: PayPal decides, with the full record.",
-                   only_for=person["id"])
+            _warn(conn, room, "info", "These facts are already in the room. If you still disagree, use "
+                  "\"Report a problem to PayPal\" on the deal card: PayPal decides, with the full record.",
+                  only_for=person["id"])
         return
     R.note(conn, room["id"], "info", msg)

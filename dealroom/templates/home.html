@@ -1,23 +1,41 @@
 {% extends "base.html" %}
+{% block bodyclass %}landing{% endblock %}
 {% block content %}
 <section class="hero">
-  <p class="eyebrow">For everyone who buys or sells digital work with PayPal</p>
-  <h1>If you did nothing wrong, the record proves it.</h1>
-  <p class="lead">Talk, agree, pay with PayPal and deliver in one conversation. Every message, payment and file is recorded with its time. An AI witness turns the chat into clear terms, checks the delivery, warns both sides about scams, and if something goes wrong, PayPal gets the full truth, whoever is right.</p>
-  <div class="sides">
-    <p><strong>You sell your work:</strong> "I never received it" can't be used against you. Your delivery and the client's download are on the record.</p>
-    <p><strong>You pay for work:</strong> you get what was agreed. The terms are written down, the file is checked against them, and your money only goes through PayPal.</p>
+  <div class="pitch">
+    <h1>If you did nothing wrong, the record proves it.</h1>
+    <p class="lead">DealRoom is where people who sell digital work and people who buy it talk, agree, pay with PayPal and deliver, in one conversation. Every message, payment and file is recorded with its time, and NVIDIA Nemotron keeps the facts straight for both sides.</p>
+    <div class="logins">
+      <form method="post" action="{{ url_for('login', key='maya') }}">
+        <button class="login">
+          <span class="avatar" aria-hidden="true">M</span>
+          <span><strong>Log in as the freelancer</strong><span class="sub">Maya, illustrator: 4 clients, one dispute, money owed</span></span>
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('login', key='alex') }}">
+        <button class="login">
+          <span class="avatar alt" aria-hidden="true">A</span>
+          <span><strong>Log in as the client</strong><span class="sub">Alex, shop owner: a portrait to pay for, a translation gone wrong</span></span>
+        </button>
+      </form>
+    </div>
+    <p class="small muted">Open both accounts in two windows to watch them update live. Your copy is private and deleted after 24 hours; payments use PayPal's sandbox, so no real money moves.
+    {% if ready %}<form method="post" action="{{ url_for('login', key='maya') }}" class="inline"><input type="hidden" name="fresh" value="1"><button class="linklike">Start over with a fresh copy</button></form>{% endif %}</p>
   </div>
-  <div class="stories">
-    {% for key, s in stories.items() %}
-    <form method="post" action="{{ url_for('start', story=key) }}" class="story">
-      <h2>{{ s.title }}</h2>
-      <p>{{ s.line }}</p>
-      <button class="btn {{ '' if key == 'ai' else 'secondary' }}">{{ 'Start' if not current else 'Start again' }}</button>
-    </form>
-    {% endfor %}
-  </div>
-  {% if current %}<p class="small"><a href="{{ url_for('room_page', room_id=current.id) }}">Back to your chats</a></p>{% endif %}
-  <p class="small muted">Each visitor gets a private copy, deleted after 24 hours. People and documents are fictional; payments use PayPal's sandbox (no real money).</p>
+  <figure class="record" aria-label="An example of a deal's record">
+    <figcaption><strong>Dog portrait</strong><span>Maya and Alex</span></figcaption>
+    <ol>
+      <li><time>Oct 15, 09:12</time><span>Terms accepted by both: $80, 2 revisions, blue background</span><i class="seal" aria-label="recorded"></i></li>
+      <li><time>Oct 15, 09:40</time><span>Deposit of $40.00 received through PayPal</span><i class="seal"></i></li>
+      <li><time>Oct 17, 08:02</time><span>File delivered, checked by Nemotron: blue background ✓</span><i class="seal"></i></li>
+      <li><time>Oct 17, 08:26</time><span>Alex downloaded the file</span><i class="seal"></i></li>
+      <li class="warn"><time>Oct 17, 09:10</time><span>Alex wrote "I never received it". Only he saw the facts first.</span><i class="seal"></i></li>
+    </ol>
+  </figure>
+</section>
+<section class="why">
+  <div><h2>For the person who sells</h2><p>Your delivery and the client's download are on the record. If a dispute comes, one click turns the record into evidence for PayPal.</p></div>
+  <div><h2>For the person who pays</h2><p>You get what was agreed: the terms are written down, the file is checked against them, and your money only moves through PayPal.</p></div>
+  <div><h2>For both</h2><p>Scam attempts are flagged, and anyone about to claim something the record contradicts sees the facts privately first.</p></div>
 </section>
 {% endblock %}

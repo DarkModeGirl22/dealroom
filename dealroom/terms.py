@@ -10,8 +10,13 @@ from . import db, llm, room as R
 SYSTEM = (
     "You read a chat between a freelancer and a client and write the terms they agreed on, as JSON. "
     "Only use what the chat says. Never invent a price, date or number. If something was not agreed, use null. "
+    "Use the LATEST agreement, not the first request: if the client asked for something and the freelancer said she "
+    "can't do it or offered something else (another color, a simpler version) and the client went along, the terms "
+    "say what was finally agreed. "
     "If an earlier deal is given and the chat refers to it (\"same price\", \"like last time\"), use the earlier "
-    "deal's value. A deadline can be relative, written as said (\"2 days\"). "
+    "deal's value. A deadline can be relative, written as said (\"2 days\"). \"Half now, half later\" (or at delivery) "
+    "means a deposit of half the price. Payments only happen through PayPal in this room: never write another payment "
+    "method, a crypto or bank refund, or a side arrangement into the terms. "
     "Reply JSON only: {\"item\": short name of the work, \"deliverables\": [what will be delivered, including the specific details the client asked for, such as subject, colors, background, size or format], "
     "\"price\": total price as a number or null, \"deposit\": amount paid before work starts or null, "
     "\"revisions\": number of revisions included or null, \"deadline\": delivery date or day as written or null, "
@@ -67,6 +72,13 @@ def check(draft: dict, chat: list[dict], earlier: dict | None = None) -> tuple[d
     if out["deadline"] and not any(w.lower() in allt.lower() for w in re.findall(r"[A-Za-z0-9]+", out["deadline"])[:3]):
         out["deadline"], _ = None, dropped.append("deadline")
     out["refund_policy"] = draft.get("refund_policy") or None
+    # scam wording never becomes part of a contract, whatever the chat says (found by tools/redteam.py)
+    from .protect import OFF_PLATFORM, REFUND_ASK
+    bad = lambda v: bool(v and (OFF_PLATFORM.search(str(v)) or REFUND_ASK.search(str(v)) or
+                                re.search(r"wallet|crypto|bitcoin|\bbtc\b|gift ?card", str(v), re.I)))
+    if bad(out["refund_policy"]):
+        out["refund_policy"] = None
+    out["deliverables"] = [d for d in out["deliverables"] if not bad(d)]
     out["quotes"] = {k: v for k, v in (draft.get("quotes") or {}).items() if out.get(k) is not None}
     return out, dropped
 
@@ -105,7 +117,7 @@ def same(a: dict, b: dict) -> bool:
     return _words(b) <= _words(a)
 
 
-def draft(conn, room_id, why: str | None = None, only_if_changed: bool = False) -> dict | None:
+def draft(conn, room_id, why: str | None = None, only_if_changed: bool = False, need_price: bool = False) -> dict | None:
     chat = R.chat_text(conn, room_id)
     if not chat:
         return None
@@ -120,6 +132,8 @@ def draft(conn, room_id, why: str | None = None, only_if_changed: bool = False) 
         R.note(conn, room_id, "warn", "DealRoom couldn't read the terms right now. Please write them on the deal card.")
         return None
     terms, dropped = check(raw, chat, earlier)
+    if need_price and terms["price"] is None:   # drafted on its own: only once a price was really agreed
+        return None
     prev = latest(conn, room_id)
     if only_if_changed and prev and same(prev["data"], terms):
         return None
@@ -181,4 +195,5 @@ def accept(conn, room, person) -> None:
         db.update(conn, "room", room["id"], status="agreed")
         R.note(conn, room["id"], "good", f"Both accepted the terms (version {t['version']}). They're now part of the record.")
     else:
-        R.note(conn, room["id"], "info", f"{person['name']} accepted the terms. Waiting for the other side.")
+        from .protect import _warn   # not repeated when terms change several times while people haggle
+        _warn(conn, room, "info", f"{person['name']} accepted the terms. Waiting for the other side.")

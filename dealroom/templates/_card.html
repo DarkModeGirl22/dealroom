@@ -102,7 +102,16 @@
       {% if not x.sent_ts %}<form data-ajax method="post" action="/r/{{ room.id }}/dispute/send"><button class="btn">Send to PayPal</button></form>
       {% else %}<p class="small"><span class="badge good">sent to PayPal</span></p>{% endif %}
     {% endif %}
-  {% else %}<p class="small muted">PayPal will decide, with the room's full record.</p>{% endif %}
+  {% else %}
+    {% if not x.report %}
+      <form data-ajax method="post" action="/r/{{ room.id }}/dispute/prepare"><button class="btn">Prepare my evidence</button></form>
+      <p class="small muted">Built from the room's record. Every sentence must point to it. PayPal decides.</p>
+    {% else %}
+      {% if x.report.assessment %}<p class="small"><strong>What the record shows:</strong> {{ x.report.assessment }}</p>{% endif %}
+      <p class="small"><a href="/r/{{ room.id }}/evidence.pdf?as={{ me.key }}" target="_blank">Evidence report (PDF)</a></p>
+      <p class="small"><a href="https://www.sandbox.paypal.com/resolutioncenter" target="_blank" rel="noopener">Add it to your case on PayPal</a></p>
+    {% endif %}
+  {% endif %}
 </section>
 {% elif side == 'client' and state.parts|selectattr('paid')|list %}
 <details class="small problem"><summary>Report a problem to PayPal</summary>

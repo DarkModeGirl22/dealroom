@@ -106,7 +106,8 @@ def _grounded(items, events: dict) -> str:
 
 def prepare(conn, room, person) -> dict | None:
     x = db.one(conn, "SELECT * FROM dispute WHERE room_id=? ORDER BY id DESC LIMIT 1", room["id"])
-    if not x or R.side(room, person) != "freelancer":
+    side = R.side(room, person)
+    if not x or side not in ("freelancer", "client"):
         return None
     ev = timeline(conn, room)
     events = {e["id"]: e for e in ev}
@@ -117,7 +118,13 @@ def prepare(conn, room, person) -> dict | None:
     rep["supports"] = raw.get("supports") if raw.get("supports") in ("freelancer", "client", "unclear") else "unclear"
     rep["events"] = ev
     db.update(conn, "dispute", x["id"], report=json.dumps(rep))
-    if rep["supports"] == "client":
+    if side == "client":   # PayPal's API takes evidence from the seller; the buyer adds it to the case on PayPal
+        R.note(conn, room["id"], "warn" if rep["supports"] == "freelancer" else "info",
+               ("Your evidence report is ready. Honestly: the record supports the freelancer on this claim. "
+                if rep["supports"] == "freelancer" else "Your evidence report is ready: the neutral timeline, both sides' "
+                "statements and the assessment, each sentence tied to the record. ") +
+               "Download the PDF and attach it to your case in PayPal's Resolution Center.", only_for=person["id"])
+    elif rep["supports"] == "client":
         R.note(conn, room["id"], "warn", "Your evidence is ready, but honestly: the record doesn't support your side on "
                "this claim. Offering a refund through PayPal may be wiser than sending it.", only_for=person["id"])
     else:

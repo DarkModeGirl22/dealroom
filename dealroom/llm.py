@@ -118,3 +118,95 @@ def look(prompt: str, image_path: Path, max_tokens: int = 700):
     msg = [{"role": "user", "content": [{"type": "text", "text": prompt},
                                         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}]}]
     return _call("vision", msg, max_tokens)
+
+
+class _SameCallIds:
+    """Nebius streams a tool call under one call_id and lists it under another in `response.completed`.
+    AG Studio's agents match tool results by call_id, so a mismatch loses the result and the agent asks again,
+    in a loop. This rewrites the final ids to the streamed ones, one server-sent event line at a time."""
+
+    def __init__(self):
+        self.buf = b""
+        self.ids = {}   # output item id -> the call_id the stream used
+
+    def _line(self, line: bytes) -> bytes:
+        if not line.startswith(b"data: "):
+            return line
+        try:
+            ev = json.loads(line[6:])
+        except ValueError:
+            return line
+        t = ev.get("type")
+        if t in ("response.output_item.added", "response.output_item.done"):
+            item = ev.get("item") or {}
+            if item.get("type") == "function_call" and item.get("id") and item.get("call_id"):
+                self.ids.setdefault(item["id"], item["call_id"])
+            return line
+        if t == "response.completed":
+            changed = False
+            for item in (ev.get("response") or {}).get("output") or []:
+                cid = self.ids.get(item.get("id"))
+                if item.get("type") == "function_call" and cid and item.get("call_id") != cid:
+                    item["call_id"], changed = cid, True
+            if changed:
+                return b"data: " + json.dumps(ev).encode()
+        return line
+
+    def feed(self, chunk: bytes) -> bytes:
+        self.buf += chunk
+        *lines, self.buf = self.buf.split(b"\n")
+        return b"".join(self._line(l) + b"\n" for l in lines)
+
+    def flush(self) -> bytes:
+        rest, self.buf = self.buf, b""
+        return self._line(rest) if rest else b""
+
+
+def responses_proxy(body: dict):
+    """The dashboard's AI assistant (AG Studio) speaks OpenAI's Responses API; Nebius serves it for Nemotron.
+    The key stays on the server, the model is fixed, output is capped, and the spending limits apply.
+    Yields the upstream bytes (a server-sent event stream when the request asks for one)."""
+    if not available():
+        yield b'data: {"type":"error","message":"The AI assistant is resting: today\'s AI budget is used up."}\n\n'
+        return
+    body = dict(body)
+    body["model"] = MODELS["smart"]
+    body["max_output_tokens"] = min(int(body.get("max_output_tokens") or 4000), 4000)
+    body.setdefault("reasoning", {"effort": "low"})
+    for k in ("store", "user", "metadata"):
+        body.pop(k, None)
+    req = urllib.request.Request(f"{URL}/responses", data=json.dumps(body).encode(),
+                                 headers={"Authorization": f"Bearer {key()}", "Content-Type": "application/json"})
+    tin = len(json.dumps(body)) // 4
+    tout = 0
+    dbg = os.environ.get("DEALROOM_AI_DEBUG")
+    if dbg:
+        with open(dbg, "a") as f:
+            f.write("\n=== REQUEST " + json.dumps({k: (v if k not in ("input", "tools") else f"[{len(v)} items]")
+                                                   for k, v in body.items()})[:1500] + "\n")
+            f.write("TOOLS " + ", ".join(t.get("name", "?") for t in body.get("tools") or []) + "\n")
+            f.write("LAST INPUT " + json.dumps((body.get("input") or [])[-2:])[:1500] + "\n")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            fix = _SameCallIds()
+            while True:
+                chunk = r.read1(4096) if hasattr(r, "read1") else r.read(4096)
+                if not chunk:
+                    break
+                tout += len(chunk) // 8
+                if dbg:
+                    with open(dbg, "a") as f:
+                        f.write(chunk.decode("utf-8", "ignore"))
+                out = fix.feed(chunk)
+                if out:
+                    yield out
+            rest = fix.flush()
+            if rest:
+                yield rest
+    except urllib.error.HTTPError as e:
+        msg = e.read()[:300].decode("utf-8", "ignore").replace('"', "'")
+        yield f'data: {{"type":"error","message":"AI service error {e.code}: {msg}"}}\n\n'.encode()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        yield b'data: {"type":"error","message":"The AI service did not answer in time."}\n\n'
+    finally:
+        _record(MODELS["smart"], tin, tout)

@@ -1,0 +1,18 @@
+{# the signed-in account: where to go, what's new, who you are #}
+<nav class="account" aria-label="Account">
+  <a href="{{ url_for('room_page', room_id=home_room, **{'as': me.key}) }}" class="tab {{ 'on' if page == 'chats' }}">Chats</a>
+  <a href="{{ url_for('dashboard', **{'as': me.key}) }}" class="tab {{ 'on' if page == 'dash' }}">{{ 'My business' if me.role == 'freelancer' else 'My purchases' }}</a>
+  <div class="bell-wrap">
+    <button type="button" id="bell" class="bell" aria-haspopup="true" aria-expanded="false" aria-label="Notifications">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6l-1.7 2.9A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.5L18 12.6V9a6 6 0 0 0-6-6Zm-2.5 15a2.5 2.5 0 0 0 5 0h-5Z" fill="currentColor"/></svg>
+      <span id="bell-count" class="count" hidden></span>
+    </button>
+    <div id="bell-panel" class="bell-panel" hidden>
+      <div class="bell-head"><strong>Notifications</strong><span class="muted small">from all your deals</span></div>
+      <ol id="bell-list"></ol>
+    </div>
+  </div>
+  <span class="me"><span class="avatar sm" aria-hidden="true">{{ me.name[0] }}</span>{{ me.name }} <span class="role">{{ me.role }}</span></span>
+  <a class="logout" href="{{ url_for('home') }}">Log out</a>
+</nav>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

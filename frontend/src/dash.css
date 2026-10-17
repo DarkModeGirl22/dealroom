@@ -1,0 +1,46 @@
+/* Dashboard page: the header in DealRoom's type, the canvas below, and DealRoom's own widgets. */
+.dash { height: 100%; display: flex; flex-direction: column; }
+.dash-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; padding: 18px 28px 6px; }
+.dash-head h1 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 2px; }
+.dash-head p { margin: 0; color: var(--ink-2); font-size: 14.5px; }
+.dash-note { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.dash-studio { flex: 1; min-height: 0; }
+.dash-msg { padding: 32px; color: var(--muted); }
+
+/* Needs you now */
+.dr-needs { height: 100%; overflow: auto; font-family: var(--font); padding: 0 6px; }
+.dr-needs ul { list-style: none; margin: 0; padding: 0; }
+.dr-needs li { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid #EEF1F6; }
+.dr-needs li:last-child { border-bottom: 0; }
+.dr-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #9AA6C2; }
+.lvl-bad .dr-dot { background: #C93A2F; box-shadow: 0 0 0 4px #FCEBE9; }
+.lvl-warn .dr-dot { background: #E3A21A; box-shadow: 0 0 0 4px #FDF4E1; }
+.lvl-info .dr-dot { background: #2546D6; box-shadow: 0 0 0 4px #EAEFFE; }
+.dr-what { flex: 1; min-width: 0; display: grid; }
+.dr-what strong { font-size: 14.5px; color: #14213D; }
+.dr-what span { font-size: 12.5px; color: #69738A; }
+.dr-go { flex: none; font-size: 13px; font-weight: 600; color: #2546D6; text-decoration: none; padding: 5px 12px; border: 1px solid #C9D3F7; border-radius: 8px; }
+.dr-go:hover { background: #EAEFFE; }
+.dr-empty { color: #69738A; font-size: 14px; }
+
+/* Proof on record */
+.dr-proof { height: 100%; overflow: auto; font-family: var(--font); padding: 0 6px; }
+.dr-sum { margin: 0 0 8px; font-size: 14px; color: #3B4763; }
+.dr-sum strong { color: #0E8A6A; }
+.dr-proof table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.dr-proof th { text-align: center; font-weight: 600; font-size: 12px; color: #69738A; padding: 4px 6px 8px; }
+.dr-proof th:first-child { text-align: left; }
+.dr-proof td { padding: 7px 6px; border-top: 1px solid #EEF1F6; text-align: center; }
+.dr-proof td:first-child { text-align: left; }
+.dr-proof td a { color: #14213D; font-weight: 600; text-decoration: none; display: block; }
+.dr-proof td a:hover { color: #2546D6; }
+.dr-proof td span { font-size: 12px; color: #69738A; }
+.dr-proof tr.dispute td:first-child { box-shadow: inset 3px 0 0 #C93A2F; padding-left: 10px; }
+.dr-stamp { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 1.5px dashed #C3CAD9; position: relative; vertical-align: middle; }
+.dr-stamp.on { border: 0; background: #0E8A6A; }
+.dr-stamp.on::after { content: ""; position: absolute; left: 6px; top: 3px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+.dash-actions { display: grid; justify-items: end; gap: 6px; }
+.ask { font: inherit; font-weight: 600; font-size: 14px; color: #fff; background: #2546D6; border: 0; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+.ask::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #76B900; margin-right: 8px; vertical-align: 1px; }
+.ask.on { background: #fff; color: #2546D6; box-shadow: inset 0 0 0 1px #C9D3F7; }

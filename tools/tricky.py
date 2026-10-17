@@ -10,6 +10,7 @@ says what must happen; the run prints PASS or FAIL for each.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["DEALROOM_DATA_DIR"] = tempfile.mkdtemp(prefix="dealroom-tricky-")
 
-from dealroom import billing as B, db, llm, room as R, terms as T, watch as WA, workspace as W  # noqa: E402
+from dealroom import billing as B, db, llm, room as R, terms as T, watch as WA, workspace as W, world as WO  # noqa: E402
 from dealroom.app import create_app  # noqa: E402
 
 RESULTS = []
@@ -28,10 +29,14 @@ RESULTS = []
 
 class Run:
     def __init__(self, story="new"):
+        """"new": an empty conversation between Maya and Alex (both played by this script).
+        "ai": an empty conversation between Maya (this script) and Sam, the client played by Nemotron."""
         self.c = create_app().test_client()
-        self.c.post(f"/start/{story}")
+        self.c.post("/login/maya")
         self.conn, self.lock = W.get(self.c.get_cookie("dealroom_visitor").value)
-        self.room = 1
+        with self.lock:
+            WO.seed(self.conn, bare=True)
+        self.room, self.client = (3, "sam") if story == "ai" else (1, "alex")
 
     def count(self):
         with self.lock:
@@ -56,15 +61,16 @@ class Run:
         return warn
 
     def notes(self, who="maya", since=0):
-        ms = self.c.get(f"/r/{self.room}/feed?as={who}&after={since}").json["messages"]
-        return [m["text"] for m in ms if m["kind"] != "chat"]
+        """DealRoom's notes in this deal that this person sees (their bell), oldest first."""
+        ms = self.c.get(f"/notifications?as={who}").json["notes"]
+        return [m["text"] for m in reversed(ms) if m["room_id"] == self.room and m["id"] > since]
 
     def terms(self):
         with self.lock:
             return T.latest(self.conn, self.room)
 
     def accept_both(self):
-        for who in ("maya", "alex"):
+        for who in ("maya", self.client):
             self.c.post(f"/r/{self.room}/terms/accept", data={"as": who})
 
     def pay_all(self):
@@ -271,10 +277,10 @@ def s_deliver_before_terms():
 
 def s_ai_client_overpriced():
     r = Run("ai")
-    r.say("maya", "Hi Alex! It's $500, ready Friday.")
+    r.say("maya", "Hi Sam! A bakery logo is $500, ready Friday.")
     with r.lock:
-        rows = db.all_(r.conn, "SELECT data, accepted_client FROM terms WHERE room_id=1")
-    bad = [db.jload(x["data"])["price"] for x in rows if x["accepted_client"] and (db.jload(x["data"]).get("price") or 0) > 90]
+        rows = db.all_(r.conn, "SELECT data, accepted_client FROM terms WHERE room_id=?", r.room)
+    bad = [db.jload(x["data"])["price"] for x in rows if x["accepted_client"] and (db.jload(x["data"]).get("price") or 0) > 200]
     check("AI client never accepts an overpriced deal", not bad, str(bad))
     t = r.terms()
     check("a quote and a counter-offer don't rewrite the terms", (t["data"]["price"] if t else None) in (None, 500.0),
@@ -283,16 +289,57 @@ def s_ai_client_overpriced():
 
 def s_ai_client_never_claims_payment():
     r = Run("ai")
-    deal(r, [("maya", "Hi Alex! Sure, $80 with 2 revisions, ready Friday. $40 now and $40 at delivery."),
+    deal(r, [("maya", "Hi Sam! Sure, $150 with 2 revisions, ready Friday. $75 now and $75 at delivery."),
              ("maya", "Did you pay yet?"), ("maya", "Please send the deposit now")])
     with r.lock:
-        texts = [m["text"] for m in R.chat_text(r.conn, 1) if m["role"] == "client"]
+        texts = [m["text"] for m in R.chat_text(r.conn, r.room) if m["role"] == "client"]
     import re
     bad = [t for t in texts if re.search(r"\b(?:i'?ve|i have|i just|just)\s+(?:sent|paid|transferred)", t, re.I)]
     check("AI client never says it paid when PayPal shows nothing", not bad, " | ".join(bad)[:120])
 
 
-SCENARIOS = [s_typos, s_haggling, s_mind_change_before_payment, s_mind_change_after_payment, s_false_paid_claim,
+def s_hind_red_background():
+    """A hands-on test that broke the AI client: Maya only works in red, haggles to $100 with 65%, delivers blue."""
+    r = Run("ai")
+    for text in ["hi i don t do brown anymore , only red logos", "yeah ofc when do u want it?",
+                 "no i do 100 dollars with 65 perxcent deposit and yeah we can do 2 revisions , what about the date",
+                 "no 100 dollars is last price but it s very good quality"]:
+        r.say("maya", text)
+    t = r.terms()
+    with r.lock:
+        first = db.one(r.conn, "SELECT data FROM terms WHERE room_id=? ORDER BY version LIMIT 1", r.room)
+    check("hands-on: no terms drafted before there's a price", not first or db.jload(first["data"]).get("price"))
+    if not (t and t["data"].get("price") == 100):
+        r.say("maya", "ok so $100, $65 deposit, 2 revisions, red logo, Friday. deal?")
+        t = r.terms()
+    check("hands-on: terms say $100 with a $65 deposit", t and t["data"].get("price") == 100 and t["data"].get("deposit") == 65,
+          str(t and t["data"]))
+    r.c.post(f"/r/{r.room}/terms/accept", data={"as": "maya"})
+    r.quiet()
+    r.c.post(f"/r/{r.room}/terms/accept", data={"as": "sam"})
+    r.c.post(f"/r/{r.room}/invoice", data={"as": "maya"})
+    r.quiet()
+    with r.lock:
+        db.insert(r.conn, "payment", room_id=r.room, part="deposit", amount=65, order_id="T", capture_id="C1",
+                  status="COMPLETED", ts=db.now(), paid_ts=db.now())
+    since = r.count()
+    r.deliver("biscuit_portrait_blue.png")
+    r.say("maya", "yeah i ll adjust that")
+    with r.lock:
+        sam = [m["text"] for m in db.all_(r.conn, "SELECT text FROM message WHERE room_id=? AND kind='chat' AND sender_id=? "
+                                                 "AND id>?", r.room, R.person(r.conn, "sam")["id"], since)]
+    import re
+    joined = " | ".join(sam)
+    agreed = json.dumps(t and t["data"]).lower()   # a wish both agreed to ("red with a cream accent") is fine to ask for
+    stale = [w for w in ("brown", "cream") if w not in agreed]
+    check("hands-on: AI client asks for what was agreed (red), not its first wish (brown)",
+          not any(re.search(rf"\b{w}\b", a, re.I) for a in sam for w in stale), joined[:200])
+    again = [a for a in sam if re.search(r"\b(?:send|pay|sending|paying)\b(?:(?!\bpaid\b).){0,30}\bdeposit\b", a, re.I)]
+    check("hands-on: AI client never offers to pay the deposit again", not again, " | ".join(again)[:400])
+    check("hands-on: 'already under way' is never repeated", sum("already under way" in n for n in r.notes()) <= 1)
+
+
+SCENARIOS = [s_hind_red_background, s_typos, s_haggling, s_mind_change_before_payment, s_mind_change_after_payment, s_false_paid_claim,
              s_false_delivered_claim, s_promise_is_not_a_claim, s_french_lie, s_scam_words, s_fake_link,
              s_innocent_messages, s_new_work_in_french, s_wrong_file, s_wrong_pdf, s_deliver_before_terms,
              s_ai_client_overpriced, s_ai_client_never_claims_payment]

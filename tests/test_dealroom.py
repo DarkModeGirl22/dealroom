@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest import mock
 
-from dealroom import billing as B, db, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA
+from dealroom import ai_people as AI, world as WO, billing as B, db, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA
 from dealroom.app import create_app
 
 CHAT = [("alex", "Hi Maya! Can you draw my dog Biscuit? Blue background please"),
@@ -22,19 +22,21 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.app = create_app()
         self.c = self.app.test_client()
-        self.c.post("/start/new")
+        self.c.post("/login/maya")
         self.tok = self.c.get_cookie("dealroom_visitor").value
         from dealroom import workspace as W
-        self.conn, _ = W.get(self.tok)
+        self.conn, self.lock = W.get(self.tok)
+        WO.seed(self.conn, bare=True)   # the people, and empty conversations: Maya with Alex (1), Lina (2), Sam (3)
         self.room = R.get(self.conn, 1)
         self.maya, self.alex = R.person(self.conn, "maya"), R.person(self.conn, "alex")
 
     def say(self, who, text):
         return self.c.post("/r/1/say", data={"as": who, "text": text})
 
-    def notes(self, who="maya", kind=None):
-        ms = self.c.get(f"/r/1/feed?as={who}").json["messages"]
-        return [m for m in ms if m["kind"] != "chat" and (kind is None or m["kind"] == kind)]
+    def notes(self, who="maya", kind=None, room=1):
+        """DealRoom's notes in one deal, oldest first, as this person's bell shows them."""
+        ms = self.c.get(f"/notifications?as={who}").json["notes"]
+        return [m for m in reversed(ms) if m["room_id"] == room and (kind is None or m["kind"] == kind)]
 
     def agree(self):
         for who, t in CHAT:
@@ -60,18 +62,39 @@ class PrivateCopies(Base):
         self.say("maya", "hello")
         other = self.app.test_client()
         self.assertEqual(other.get("/r/1?as=maya").status_code, 302)  # no copy yet: back to the welcome page
-        other.post("/start/new")
-        self.assertEqual(other.get("/r/1/feed?as=maya").json["messages"], [])
+        other.post("/login/maya")
+        self.assertNotIn("hello", [m["text"] for m in other.get("/r/1/feed?as=maya").json["messages"]])
 
     def test_strangers_cant_open_the_room(self):
         self.assertEqual(self.c.get("/r/1?as=nobody").status_code, 404)
         self.assertEqual(self.c.get("/r/1?as=sam").status_code, 403)       # another client of Maya's
         self.assertEqual(self.c.get("/r/1/feed?as=lina").status_code, 403)
 
-    def test_story_two_is_a_finished_paid_deal(self):
-        self.c.post("/start/wrong")
-        self.assertTrue(all(p["paid"] for p in B.parts(self.conn, R.get(self.conn, 1))))
-        self.assertTrue(D.latest(self.conn, 1)["downloads"])
+    def test_both_accounts_start_in_the_middle(self):
+        c = self.app.test_client()
+        c.post("/login/maya")
+        conn, _ = __import__("dealroom.workspace", fromlist=["W"]).get(c.get_cookie("dealroom_visitor").value)
+        rid = WO.first_room(conn, "maya")
+        rm = R.get(conn, rid)
+        parts = {p["part"]: p["paid"] for p in B.parts(conn, rm)}
+        self.assertEqual(parts, {"deposit": True, "final": False})           # Alex owes the last $40
+        self.assertTrue(D.latest(conn, rid)["downloads"])
+        jordan = db.one(conn, "SELECT r.id FROM room r JOIN person p ON p.id=r.client_id WHERE p.key='jordan' AND r.title='Podcast cover'")
+        self.assertEqual(X.latest(conn, jordan["id"])["status"], "open")       # a dispute to answer
+        nora = db.one(conn, "SELECT id FROM room WHERE title='About page translation'")["id"]
+        self.assertIn("no", [c["result"] for c in D.latest(conn, nora)["check"]["checks"]])   # the PDF is still French
+        maya_chats = [x["other"]["key"] for x in R.conversations(conn, R.person(conn, "maya"))]
+        alex_chats = [x["other"]["key"] for x in R.conversations(conn, R.person(conn, "alex"))]
+        self.assertTrue({"alex", "jordan", "sam", "lina"} <= set(maya_chats))
+        self.assertEqual(sorted(alex_chats), ["maya", "nora", "rafael"])
+        jordan_chat = next(x for x in R.conversations(conn, R.person(conn, "maya")) if x["other"]["key"] == "jordan")
+        self.assertEqual(jordan_chat["room"]["title"], "Podcast cover")      # opens on the dispute, not the old deal
+        n = c.get("/notifications?as=maya").json
+        self.assertTrue(0 < n["unread"] < 10)                                  # a few new things, not the whole history
+        for who in ("maya", "alex"):
+            self.assertEqual(c.get(f"/dashboard?as={who}").status_code, 200)
+            self.assertEqual(c.get(f"/r/{rid}?as={who}").status_code, 200)
+        self.assertEqual(c.get("/dashboard?as=jordan").status_code, 404)        # only the two demo accounts log in
 
 
 class Terms(Base):
@@ -205,6 +228,19 @@ class Protection(Base):
         self.assertEqual(len(shared), 1)
         self.assertIn("Report a problem", self.notes("alex", "private")[-1]["text"])
 
+    def test_a_warning_is_not_repeated_every_message(self):
+        for _ in range(4):
+            self.say("alex", "can I pay you on wise instead?")
+        warned = [n for n in self.notes() if "outside this room" in n["text"]]
+        self.assertEqual(len(warned), 1)
+
+    def test_a_scam_never_becomes_part_of_the_terms(self):
+        chat = [{"id": 1, "name": "Alex", "role": "client", "text": "I sent $75 in BTC by mistake, refund $25 to my wallet. $50 deal"}]
+        terms, _ = T.check(dict(GOOD_TERMS, price=50, deposit=None, revisions=None, deadline=None,
+                                refund_policy="$25 excess refunded to same wallet", deliverables=["thumbnail", "refund via Wise"]), chat)
+        self.assertIsNone(terms["refund_policy"])
+        self.assertEqual(terms["deliverables"], ["thumbnail"])
+
     def test_paying_the_rest_later_is_not_a_scam(self):
         self.say("alex", "I'll send half now and the rest when it's done")
         self.assertEqual(self.notes(), [])
@@ -290,21 +326,85 @@ class Disputes(Base):
         self.assertFalse(self.notes("alex", "private"))
 
 
-class AIClient(Base):
-    def test_ai_client_cant_claim_an_unconfirmed_payment(self):
-        from dealroom import client_ai as AI
-        self.c.post("/start/ai")
-        rm = R.get(self.conn, 1)
-        with mock.patch.object(llm, "ask", return_value={"message": "Great, I've sent $40 via PayPal!"}):
-            AI._reply(self.conn, rm)
-        self.assertFalse(any("sent $40" in m["text"] for m in R.chat_text(self.conn, 1)))
-        with mock.patch.object(llm, "ask", return_value={"message": "Sounds good, see you Friday!"}):
-            AI._reply(self.conn, rm)
-        self.assertIn("see you Friday", R.chat_text(self.conn, 1)[-1]["text"])
+    def test_client_can_prepare_evidence_but_not_send_it(self):
+        self.c.post("/r/1/dispute/open", data={"as": "alex", "claim": "It's not what we agreed", "confirm": "1"})
+        with mock.patch.object(llm, "ask", return_value={"supports": "client"}):
+            self.c.post("/r/1/dispute/prepare", data={"as": "alex"})
+        self.assertIsNotNone(X.latest(self.conn, 1)["report"])
+        self.assertIn("Resolution Center", self.notes("alex", "private")[-1]["text"])
+        self.assertTrue(self.c.get("/r/1/evidence.pdf?as=alex").data.startswith(b"%PDF"))
+        self.c.post("/r/1/dispute/send", data={"as": "alex"})
+        self.assertFalse(X.latest(self.conn, 1)["sent_ts"])          # PayPal takes evidence from the seller
 
-    def test_ai_client_is_labelled(self):
-        self.c.post("/start/ai")
-        self.assertEqual(R.person(self.conn, "alex")["name"], "Alex (AI)")
+class AIPeople(Base):
+    """Sam (a client) and Rafael (a freelancer) are played by Nemotron, and checked by code like everyone else."""
+
+    def test_ai_people_are_labelled(self):
+        self.assertEqual(R.person(self.conn, "sam")["name"], "Sam (AI)")
+        self.assertEqual(R.person(self.conn, "rafael")["name"], "Rafael (AI)")
+        self.assertIsNone(AI.who(self.conn, R.get(self.conn, 1)))           # Alex is a person
+        self.assertEqual(AI.who(self.conn, R.get(self.conn, 3))[0], "sam")
+
+    def test_ai_client_cant_claim_an_unconfirmed_payment(self):
+        rm = R.get(self.conn, 3)
+        import threading
+        with mock.patch.object(llm, "ask", return_value={"message": "Great, I've sent $40 via PayPal!"}):
+            AI._reply(self.conn, rm, threading.RLock())
+        self.assertFalse(any("sent $40" in m["text"] for m in R.chat_text(self.conn, 3)))
+        with mock.patch.object(llm, "ask", return_value={"message": "Sounds good, see you Friday!"}):
+            AI._reply(self.conn, rm, threading.RLock())
+        self.assertIn("see you Friday", R.chat_text(self.conn, 3)[-1]["text"])
+
+    def test_ai_never_offers_to_pay_twice_reopens_terms_or_sends_links(self):
+        self.agree()
+        rm, alex = R.get(self.conn, 1), self.alex
+        self.assertIsNone(AI.problem(self.conn, rm, alex, "Great, I'll send the $40 deposit now"))
+        db.insert(self.conn, "payment", room_id=1, part="deposit", amount=40, order_id="T", capture_id="C",
+                  status="COMPLETED", ts=db.now(), paid_ts=db.now())
+        self.assertIn("already paid", AI.problem(self.conn, rm, alex, "Great, I'll send the $40 deposit now"))
+        self.assertIsNone(AI.problem(self.conn, rm, alex, "I'll pay the remaining $40 now"))
+        self.assertIn("accepted", AI.problem(self.conn, rm, alex, "Can we lock in $80 with two revisions?"))
+        self.assertIn("link", AI.problem(self.conn, rm, self.maya, "I'll send you a PayPal link"))
+        self.assertIn("delivered", AI.problem(self.conn, rm, self.maya, "I've sent the file, check it!"))
+
+    def test_what_the_ai_tester_caught(self):
+        """Found by tools/redteam.py: an AI person agreeing to a scam, claiming a payment, echoing, invoicing as client."""
+        sam, rafael = R.person(self.conn, "sam"), R.person(self.conn, "rafael")
+        rm = R.get(self.conn, 3)
+        self.assertIn("outside the PayPal", AI.problem(self.conn, rm, sam, "Sure, I'll send the $25 back to your BTC wallet"))
+        self.assertIn("outside the PayPal", AI.problem(self.conn, rm, sam, "I'll pay via Friends & Family right away"))
+        self.assertIsNone(AI.problem(self.conn, rm, sam, "Can I pay with Friends & Family?", scam_turn=True))   # the one scripted try
+        self.assertIn("invoice", AI.problem(self.conn, rm, sam, "Great, I'll send the invoice once we lock it in"))
+        R.say(self.conn, 3, self.maya["id"], "Got it! Payment received, starting sketches today.")
+        self.assertIn("repeat", AI.problem(self.conn, rm, sam, "Maya: Got it! Payment received, starting sketches today."))
+        self.assertIn("received one", AI.problem(self.conn, rm, rafael, "Got it, I've received the $40 payment!"))
+        self.assertIn("received one", AI.problem(self.conn, rm, rafael, "Great, I\u2019ve received the deposit."))   # curly apostrophe
+        self.assertIn("freelancer delivers", AI.problem(self.conn, rm, sam, "I'll send the final files through the deal card"))
+        self.assertIn("new version", AI.problem(self.conn, rm, rafael, "Sorry! I've re-uploaded a corrected thumbnail."))
+
+    def test_ai_freelancer_delivers_once_paid(self):
+        c = self.app.test_client()
+        c.post("/login/alex")
+        conn, lock = __import__("dealroom.workspace", fromlist=["W"]).get(c.get_cookie("dealroom_visitor").value)
+        rid = db.one(conn, "SELECT id FROM room WHERE title='YouTube thumbnail'")["id"]
+        rm, rafael = R.get(conn, rid), R.person(conn, "rafael")
+        db.insert(conn, "terms", room_id=rid, version=1, data=json.dumps(dict(GOOD_TERMS, price=50, deposit=None)),
+                  source="ai", accepted_freelancer=db.now(), accepted_client=db.now(), invoice_number="X", ts=db.now())
+        db.insert(conn, "payment", room_id=rid, part="full", amount=50, order_id="T", capture_id="C",
+                  status="COMPLETED", ts=db.now(), paid_ts=db.now())
+        with mock.patch.object(llm, "available", return_value=True), \
+                mock.patch.object(llm, "ask", return_value={"message": "Done, the thumbnail is on the deal card!"}), \
+                mock.patch.object(llm, "look", return_value=None):
+            with lock:
+                AI.react(conn, lock, rid, "paid")
+            import time
+            for _ in range(50):
+                if D.latest(conn, rid):
+                    break
+                time.sleep(0.05)
+        with lock:
+            self.assertEqual(D.latest(conn, rid)["filename"], "thumbnail_train_your_dog.png")
+            self.assertIn("📎 thumbnail_train_your_dog.png", [m["text"] for m in R.chat_text(conn, rid)])
 
 
 class Webhooks(Base):
@@ -326,6 +426,26 @@ class Webhooks(Base):
         self.assertEqual([(r["paypal_id"], r["reason"]) for r in rows], [("PP-D-1", "not_received")])
 
 
+class Notifications(Base):
+    def test_notes_go_to_the_bell_not_the_chat(self):
+        self.agree()
+        chat = self.c.get("/r/1/feed?as=maya").json
+        self.assertTrue(all(m["kind"] == "chat" for m in chat["messages"]))
+        self.assertIn("Both accepted the terms", " ".join(n["text"] for n in chat["notes"]))
+        self.assertGreater(chat["unread"], 0)
+        top = chat["notes"][0]["id"]
+        self.c.post("/notifications/seen", data={"as": "maya", "upto": top})
+        self.assertEqual(self.c.get("/notifications?as=maya").json["unread"], 0)
+        self.assertGreater(self.c.get("/notifications?as=alex").json["unread"], 0)   # each person reads their own
+
+    def test_a_delivery_is_a_file_in_the_chat(self):
+        self.agree()
+        self.deliver()
+        last = self.c.get("/r/1/feed?as=alex").json["messages"][-1]
+        self.assertEqual((last["sender_key"], last["text"]), ("maya", "📎 portrait.png"))
+        self.assertIn("delivery_id", last["data"])
+
+
 class Screens(Base):
     def test_every_screen_renders(self):
         self.assertEqual(self.c.get("/").status_code, 200)
@@ -341,7 +461,7 @@ class Conversations(Base):
 
     def test_one_conversation_per_person(self):
         chats = R.conversations(self.conn, self.maya)
-        self.assertEqual(sorted(c["other"]["name"] for c in chats), ["Alex", "Lina", "Sam"])
+        self.assertEqual(sorted(c["other"]["name"] for c in chats), ["Alex", "Lina", "Sam (AI)"])
         alex_side = R.conversations(self.conn, self.alex)
         self.assertEqual([c["other"]["name"] for c in alex_side], ["Maya"])   # Alex never sees Maya's other clients
 
@@ -394,6 +514,19 @@ class KeepsUpWithTheChat(Base):
         T.edit(self.conn, 1, self.maya, {"deposit": ""})
         self.watch("maya", "Yes, half now ($40) and $40 at delivery. Deal?", "agreed", GOOD_TERMS)
         self.assertEqual(T.latest(self.conn, 1)["data"]["deposit"], 40)
+
+    def test_under_way_is_said_once_and_only_to_requests(self):
+        self.agree()
+        self.pay_all()
+        for who, text in [("alex", "Can it be $60 instead?"), ("maya", "yeah I'll adjust that"), ("alex", "and $50?")]:
+            self.watch(who, text, "change_asked")
+        said = [n for n in self.notes() if n["text"].startswith("This deal is already under way")]
+        self.assertEqual(len(said), 1)
+
+    def test_no_terms_without_a_price(self):
+        self.say("alex", "Portrait of my dog please, red background")
+        self.watch("maya", "yeah ofc when do u want it?", "agreed", dict(GOOD_TERMS, price=None, deposit=None))
+        self.assertIsNone(T.latest(self.conn, 1))
 
     def test_a_request_alone_changes_nothing(self):
         self.agree()

@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import threading
 
-from flask import Flask, Response, abort, send_file, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, send_file, g, jsonify, redirect, render_template, request, stream_with_context, url_for
 
-from . import billing as B, client_ai as AI, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA
+from . import ai_people as AI, billing as B, dash as DASH, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA, world as WO
 
 COOKIE = "dealroom_visitor"
 
@@ -52,30 +52,77 @@ def create_app() -> Flask:
 
     @app.get("/")
     def home():
-        rm = R.get(g.conn, 1) if g.conn is not None else None
-        return render_template("home.html", stories=R.STORIES, current=rm)
+        return render_template("home.html", ready=g.conn is not None and R.person(g.conn, "maya") is not None)
 
-    @app.post("/start/<story>")
-    def start(story):
-        if story not in R.STORIES:
+    @app.post("/login/<key>")
+    def login(key):
+        """Log in to one of the two demo accounts. Both share this visitor's private copy, so two windows
+        (one per account) see each other live."""
+        if key not in WO.LOGINS:
             abort(404)
         tok = g.token if W.valid(g.token) else W.new_token()
-        if not W.exists(tok):
+        fresh = not W.exists(tok)
+        if fresh:
             W.cleanup()
         conn, lock = W.get(tok)
         with lock:
-            rid = R.seed(conn, story)
-        resp = redirect(url_for("room_page", room_id=rid, **{"as": "alex" if story == "wrong" else "maya"}))
-        resp.set_cookie(COOKIE, tok, max_age=W.KEEP_SECONDS, httponly=True, samesite="Lax",
-                        secure=request.is_secure)
+            if fresh or request.form.get("fresh") == "1" or not R.person(conn, key):
+                WO.seed(conn)
+            rid = WO.first_room(conn, key)
+        resp = redirect(url_for("room_page", room_id=rid, **{"as": key}))
+        resp.set_cookie(COOKIE, tok, max_age=W.KEEP_SECONDS, httponly=True, samesite="Lax", secure=request.is_secure)
         return resp
+
+    @app.get("/notifications")
+    def notifications():
+        if g.conn is None:
+            return jsonify(notes=[], unread=0)
+        notes = R.notifications(g.conn, viewer())
+        return jsonify(notes=notes, unread=sum(1 for n in notes if n["unread"]))
+
+    @app.get("/dashboard")
+    def dashboard():
+        if g.conn is None:
+            return redirect(url_for("home"))
+        p = viewer()
+        if p["key"] not in WO.LOGINS:
+            abort(404)
+        return render_template("dashboard.html", me=p, home_room=WO.first_room(g.conn, p["key"]))
+
+    @app.get("/api/dash")
+    def dash_data():
+        if g.conn is None:
+            return jsonify(error="no copy"), 404
+        p = viewer()
+        out = DASH.build(g.conn, p)
+        out["license"] = os.environ.get("AG_STUDIO_LICENSE", "")
+        out["ai"] = llm.available()
+        return jsonify(out)
+
+    @app.post("/api/ai/responses")
+    def ai_responses():
+        """AG Studio's AI assistant, answered by NVIDIA Nemotron 3 Super on Nebius."""
+        if g.conn is None:
+            abort(403)
+        body = request.get_json(silent=True) or {}
+        stream = bool(body.get("stream"))
+        return Response(stream_with_context(llm.responses_proxy(body)),
+                        mimetype="text/event-stream" if stream else "application/json",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/notifications/seen")
+    def notifications_seen():
+        if g.conn is None:
+            return jsonify(ok=False)
+        R.mark_seen(g.conn, viewer(), request.form.get("upto", type=int) or 0)
+        return jsonify(ok=True)
 
     @app.get("/r/<int:room_id>")
     def room_page(room_id):
         rm, p = load(room_id)
         return render_template("room.html", room=rm, me=p, other=R.other(g.conn, rm, p), side=R.side(rm, p),
-                               story=R.STORIES.get(rm["story"]), paypal_client_id=paypal.client_id(),
-                               chats=R.conversations(g.conn, p))
+                               paypal_client_id=paypal.client_id(), chats=R.conversations(g.conn, p),
+                               ai_other=AI.who(g.conn, rm) is not None)
 
     @app.post("/r/<int:room_id>/say")
     def say(room_id):
@@ -86,14 +133,10 @@ def create_app() -> Flask:
             P.scan(g.conn, rm, p, text)
             if request.form.get("checked") == "1":   # sent anyway, after the private check
                 P.after_claim(g.conn, rm, p, text)
-            freelancer = R.side(rm, p) == "freelancer"
             conn, lock, rid = g.conn, g.lock, rm["id"]
 
-            def then(did):   # the AI client answers after the room has caught up with the message
-                if did == "drafted":
-                    AI.react(conn, lock, rid, "terms")
-                elif freelancer:
-                    AI.react(conn, lock, rid, "message")
+            def then(did):   # the AI person answers after the room has caught up with the message
+                AI.react(conn, lock, rid, "terms" if did == "drafted" else "message")
             if llm.available():
                 WA.after_message(conn, lock, rid, mid, p["id"], then)
         return jsonify(ok=True)
@@ -123,10 +166,12 @@ def create_app() -> Flask:
     def feed(room_id):
         rm, p = load(room_id)
         after = request.args.get("after", type=int, default=0)
-        msgs = R.feed(g.conn, rm["id"], p["id"], after)
+        msgs = R.feed(g.conn, rm["id"], p["id"], after, chat_only=True)
         deals = R.thread(g.conn, rm)
         card = render_template("_card.html", room=rm, me=p, side=R.side(rm, p), state=state(rm), deals=deals)
-        return jsonify(messages=msgs, card=card, multi=len(deals) > 1)
+        notes = R.notifications(g.conn, p)
+        return jsonify(messages=msgs, card=card, multi=len(deals) > 1, notes=notes,
+                       unread=sum(1 for n in notes if n["unread"]))
 
     @app.post("/r/<int:room_id>/terms/draft")
     def terms_draft(room_id):
@@ -145,6 +190,7 @@ def create_app() -> Flask:
     def terms_accept(room_id):
         rm, p = load(room_id)
         T.accept(g.conn, rm, p)
+        AI.react(g.conn, g.lock, rm["id"], "accepted")
         return jsonify(ok=True)
 
     @app.post("/r/<int:room_id>/invoice")
@@ -179,6 +225,8 @@ def create_app() -> Flask:
         try:
             row = B.capture(g.conn, rm, (request.get_json(silent=True) or request.form).get("order_id", ""),
                             f"{g.token}:{rm['id']}")
+            if row["status"] == "COMPLETED":
+                AI.react(g.conn, g.lock, rm["id"], "paid")
             return jsonify(status=row["status"])
         except (ValueError, KeyError, paypal.PayPalError) as e:
             return jsonify(error=str(e)[:200]), 400
