@@ -28,7 +28,7 @@ h3 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 
 .switch a.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(16,24,40,.08); }
 
 /* welcome */
-.hero { max-width: 760px; margin: 56px auto; padding: 0 16px; }
+.hero { max-width: 980px; margin: 56px auto; padding: 0 16px; }
 .eyebrow { color: var(--brand); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; margin: 0 0 10px; }
 .lead { font-size: 17px; color: #3a4558; margin: 0 0 28px; }
 .stories { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
@@ -97,3 +97,5 @@ details.problem { border-top: 1px solid var(--line); padding-top: 12px; }
   .stories { grid-template-columns: 1fr; }
   .switch a span { display: none; }
 }
+.stories { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 860px) { .stories { grid-template-columns: 1fr; } }

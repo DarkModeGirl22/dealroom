@@ -17,8 +17,10 @@ OFF_PLATFORM = re.compile(r"friends\s*(?:&|and)\s*family|\bf\s*&\s*f\b|\bzelle\b
 REFUND_ASK = re.compile(r"(?:sent|paid|transferred).{0,30}(?:too much|extra|by mistake|twice)|"
                         r"(?:send|give|transfer).{0,20}(?:back|the difference|the rest)", re.I)
 LINK = re.compile(r"https?://\S+|www\.\S+", re.I)
-CLAIMS = re.compile(r"receiv|never got|didn'?t get|not get|deliver|download|paid|pay|not what|wrong|didn'?t ask|"
-                    r"late|missing|refund|scam|fraud|lie", re.I)
+# a cheap first filter, wide on purpose: the AI decides what the message really claims
+CLAIMS = re.compile(r"receiv|never got|didn'?t get|not get|deliver|download|paid|pay|not what|wrong|asked|ask for|"
+                    r"isn'?t|aren'?t|doesn'?t|don'?t|wasn'?t|not (?:like|the|as)|late|missing|refund|money back|"
+                    r"scam|fraud|lie|cheat", re.I)
 
 CLASSIFY = (
     "A message in a chat between a freelancer and a client. Say what it claims or asks, as JSON only: "

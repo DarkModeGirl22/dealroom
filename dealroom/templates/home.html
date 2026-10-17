@@ -2,14 +2,14 @@
 {% block content %}
 <section class="hero">
   <p class="eyebrow">For digital freelancers paid through PayPal</p>
-  <h1>If you did nothing wrong, you can't be made to look bad.</h1>
+  <h1>If you did nothing wrong, the record proves it.</h1>
   <p class="lead">One room per job: the chat, the terms, the PayPal payment and the delivery, all recorded. An AI witness keeps the facts, warns about scams, and if a dispute happens, PayPal gets the full truth.</p>
   <div class="stories">
     {% for key, s in stories.items() %}
     <form method="post" action="{{ url_for('start', story=key) }}" class="story">
       <h2>{{ s.title }}</h2>
       <p>{{ s.line }}</p>
-      <button class="btn {{ '' if loop.first else 'secondary' }}">{{ 'Start' if not current else 'Start again' }}</button>
+      <button class="btn {{ '' if key == 'ai' else 'secondary' }}">{{ 'Start' if not current else 'Start again' }}</button>
     </form>
     {% endfor %}
   </div>

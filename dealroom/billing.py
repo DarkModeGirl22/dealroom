@@ -44,7 +44,8 @@ def parts(conn, room) -> list[dict]:
     if not t or not t["agreed"]:
         return []
     d = t["data"]
-    plan = [("deposit", d["deposit"]), ("final", round(d["price"] - d["deposit"], 2))] if d.get("deposit") else [("full", d["price"])]
+    dep = d.get("deposit")
+    plan = [("deposit", dep), ("final", round(d["price"] - dep, 2))] if dep and dep < d["price"] else [("full", d["price"])]
     out = []
     for part, amount in plan:
         p = db.one(conn, "SELECT * FROM payment WHERE room_id=? AND part=? ORDER BY id DESC LIMIT 1", room["id"], part)

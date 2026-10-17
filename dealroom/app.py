@@ -7,7 +7,7 @@ import threading
 
 from flask import Flask, Response, abort, send_file, g, jsonify, redirect, render_template, request, url_for
 
-from . import billing as B, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T
+from . import billing as B, client_ai as AI, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T
 
 COOKIE = "dealroom_visitor"
 
@@ -85,6 +85,8 @@ def create_app() -> Flask:
             P.scan(g.conn, rm, p, text)
             if request.form.get("checked") == "1":   # sent anyway, after the private check
                 P.after_claim(g.conn, rm, p, text)
+            if R.side(rm, p) == "freelancer":
+                AI.react(g.conn, g.lock, rm["id"], "message")
         return jsonify(ok=True)
 
     @app.post("/r/<int:room_id>/precheck")
@@ -103,7 +105,8 @@ def create_app() -> Flask:
     @app.post("/r/<int:room_id>/terms/draft")
     def terms_draft(room_id):
         rm, p = load(room_id)
-        T.draft(g.conn, rm["id"])
+        if T.draft(g.conn, rm["id"]):
+            AI.react(g.conn, g.lock, rm["id"], "terms")
         return jsonify(ok=True)
 
     @app.post("/r/<int:room_id>/terms/edit")
@@ -121,8 +124,8 @@ def create_app() -> Flask:
     @app.post("/r/<int:room_id>/invoice")
     def invoice(room_id):
         rm, p = load(room_id)
-        if R.side(rm, p) == "freelancer":
-            B.make_invoice(g.conn, rm)
+        if R.side(rm, p) == "freelancer" and B.make_invoice(g.conn, rm):
+            AI.react(g.conn, g.lock, rm["id"], "invoice")
         return jsonify(ok=True)
 
     @app.get("/r/<int:room_id>/invoice.pdf")
@@ -158,8 +161,8 @@ def create_app() -> Flask:
     def deliver(room_id):
         rm, p = load(room_id)
         f = request.files.get("file")
-        if f:
-            D.save(g.conn, rm, p, f)
+        if f and D.save(g.conn, rm, p, f):
+            AI.react(g.conn, g.lock, rm["id"], "delivery")
         return jsonify(ok=True)
 
     @app.get("/r/<int:room_id>/file/<int:did>")

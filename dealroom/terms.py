@@ -10,7 +10,7 @@ from . import db, llm, room as R
 SYSTEM = (
     "You read a chat between a freelancer and a client and write the terms they agreed on, as JSON. "
     "Only use what the chat says. Never invent a price, date or number. If something was not agreed, use null. "
-    "Reply JSON only: {\"item\": short name of the work, \"deliverables\": [what will be delivered], "
+    "Reply JSON only: {\"item\": short name of the work, \"deliverables\": [what will be delivered, including the specific details the client asked for, such as subject, colors, background, size or format], "
     "\"price\": total price as a number or null, \"deposit\": amount paid before work starts or null, "
     "\"revisions\": number of revisions included or null, \"deadline\": delivery date or day as written or null, "
     "\"refund_policy\": refund rule as agreed or null, "
@@ -50,6 +50,9 @@ def check(draft: dict, chat: list[dict]) -> tuple[dict, list[str]]:
             ok = True
         if k == "deposit" and out.get("price") and v > out["price"]:
             ok = False
+        if k == "deposit" and ok and out.get("price") and abs(v - out["price"]) < 0.01:
+            out[k] = None   # "everything upfront" is one full payment, not a deposit (found by tools/eval.py)
+            continue
         if ok:
             out[k] = int(v) if k == "revisions" else round(v, 2)
         else:

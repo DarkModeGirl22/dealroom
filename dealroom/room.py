@@ -8,12 +8,18 @@ DEMO_PEOPLE = [
     ("maya", "Maya", "freelancer", "maya.sample@example.com"),
     ("alex", "Alex", "client", "alex.sample@example.com"),
 ]
+STORIES_ORDER = ("ai", "wrong", "new")
 STORIES = {
     "new": {"title": "A new deal", "line": "Maya draws pet portraits. Alex wants one of his dog. Play both sides: talk, "
             "agree, pay with PayPal (sandbox), deliver."},
+    "ai": {"title": "A new deal, with an AI client", "line": "You're Maya. Alex is played by NVIDIA Nemotron: he chats, "
+           "accepts fair terms, tries one scam and checks your delivery. Switch to Alex only to pay with PayPal."},
     "wrong": {"title": "A deal gone wrong", "line": "Alex got his portrait two days ago and it was paid in full. Now he "
               "claims he never received it. Write it as Alex and see what the room does."},
 }
+
+
+STORIES = {k: STORIES[k] for k in STORIES_ORDER}
 
 
 def _ago(hours: float) -> str:
@@ -26,11 +32,15 @@ def seed(conn, story: str = "new"):
     for t in ("download", "delivery", "payment", "terms", "message", "dispute", "room", "person"):
         conn.execute(f"DELETE FROM {t}")
     conn.commit()
-    ids = {k: db.insert(conn, "person", key=k, name=n, role=r, email=e) for k, n, r, e in DEMO_PEOPLE}
+    ids = {k: db.insert(conn, "person", key=k, name=("Alex (AI)" if story == "ai" and k == "alex" else n), role=r, email=e)
+           for k, n, r, e in DEMO_PEOPLE}
     rid = db.insert(conn, "room", title="Dog portrait", freelancer_id=ids["maya"], client_id=ids["alex"],
                     status="talking", story=story, created=_ago(72 if story == "wrong" else 0))
     if story == "wrong":
         _seed_wrong(conn, rid, ids)
+    if story == "ai":
+        db.insert(conn, "message", room_id=rid, sender_id=ids["alex"], kind="chat", ts=db.now(),
+                  text="Hi Maya! I love your pet portraits. Could you draw my dog Biscuit on a blue background?")
     return rid
 
 
