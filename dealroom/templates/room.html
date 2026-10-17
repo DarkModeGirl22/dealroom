@@ -1,12 +1,21 @@
 {% extends "base.html" %}
 {% block title %}: {{ room.title }}{% endblock %}
 {% block topright %}
+<div class="topnav">
+{% if deals|length > 1 %}
+<nav class="deals" aria-label="Deals">
+  <select onchange="location.href=this.value" aria-label="Choose a deal">
+    {% for d in deals %}<option value="{{ url_for('room_page', room_id=d.id, **{'as': me.key}) }}" {{ 'selected' if d.id == room.id }}>{{ d.title }}</option>{% endfor %}
+  </select>
+</nav>
+{% endif %}
 <nav class="switch" aria-label="Whose side you see">
   {% for key, name, role in [(room.freelancer_key, room.freelancer, 'freelancer'), (room.client_key, room.client, 'client')] %}
   <a href="{{ url_for('room_page', room_id=room.id, **{'as': key}) }}" class="{{ 'on' if key == me.key }}" {{ 'aria-current=page' if key == me.key }}>
     {{ name }} <span>{{ role }}</span></a>
   {% endfor %}
 </nav>
+</div>
 {% endblock %}
 {% block content %}
 {% if story %}<p class="story-line"><strong>{{ story.title }}.</strong> {{ story.line }}</p>{% endif %}

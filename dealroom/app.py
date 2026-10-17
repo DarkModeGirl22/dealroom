@@ -7,7 +7,7 @@ import threading
 
 from flask import Flask, Response, abort, send_file, g, jsonify, redirect, render_template, request, url_for
 
-from . import billing as B, client_ai as AI, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T
+from . import billing as B, client_ai as AI, db, workspace as W, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA
 
 COOKIE = "dealroom_visitor"
 
@@ -73,21 +73,48 @@ def create_app() -> Flask:
     @app.get("/r/<int:room_id>")
     def room_page(room_id):
         rm, p = load(room_id)
+        deals = R.rooms_for(g.conn, p)
+        first = rm["id"] == deals[0]["id"]   # the story's line belongs to its first deal only
         return render_template("room.html", room=rm, me=p, other=R.other(g.conn, rm, p), side=R.side(rm, p),
-                               story=R.STORIES.get(rm["story"]), paypal_client_id=paypal.client_id())
+                               story=R.STORIES.get(rm["story"]) if first else None, paypal_client_id=paypal.client_id(),
+                               deals=deals)
 
     @app.post("/r/<int:room_id>/say")
     def say(room_id):
         rm, p = load(room_id)
         text = (request.form.get("text") or "").strip()[:2000]
         if text:
-            R.say(g.conn, rm["id"], p["id"], text)
+            mid = R.say(g.conn, rm["id"], p["id"], text)
             P.scan(g.conn, rm, p, text)
             if request.form.get("checked") == "1":   # sent anyway, after the private check
                 P.after_claim(g.conn, rm, p, text)
-            if R.side(rm, p) == "freelancer":
-                AI.react(g.conn, g.lock, rm["id"], "message")
+            freelancer = R.side(rm, p) == "freelancer"
+            conn, lock, rid = g.conn, g.lock, rm["id"]
+
+            def then(did):   # the AI client answers after the room has caught up with the message
+                if did == "drafted":
+                    AI.react(conn, lock, rid, "terms")
+                elif freelancer:
+                    AI.react(conn, lock, rid, "message")
+            if llm.available():
+                WA.after_message(conn, lock, rid, mid, p["id"], then)
         return jsonify(ok=True)
+
+    @app.post("/r/<int:room_id>/newdeal")
+    def new_deal(room_id):
+        rm, p = load(room_id)
+        rid = WA.start_new_deal(g.conn, rm)
+        if not rid:
+            return jsonify(ok=True)
+        conn, lock = g.conn, g.lock
+
+        def draft():
+            with lock:
+                if T.draft(conn, rid, why="New deal"):
+                    AI.react(conn, lock, rid, "terms")
+        if llm.available():
+            threading.Thread(target=draft, daemon=True).start()
+        return jsonify(go=url_for("room_page", room_id=rid, **{"as": p["key"]}))
 
     @app.post("/r/<int:room_id>/precheck")
     def precheck(room_id):
@@ -238,6 +265,7 @@ def create_app() -> Flask:
         t = T.latest(g.conn, rm["id"])
         return {"terms": t, "parts": B.parts(g.conn, rm), "ai": llm.available(),
                 "paypal": paypal.configured(), "client_id": paypal.client_id(),
-                "delivery": D.latest(g.conn, rm["id"]), "dispute": X.latest(g.conn, rm["id"])}
+                "delivery": D.latest(g.conn, rm["id"]), "dispute": X.latest(g.conn, rm["id"]),
+                "new_work": WA.suggestion(R.get(g.conn, rm["id"]))}
 
     return app

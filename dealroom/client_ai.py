@@ -47,7 +47,7 @@ def _state(conn, room) -> str:
     return "\n".join(bits) or "Nothing agreed yet."
 
 
-def _reply(conn, room, extra: str = ""):
+def _reply(conn, room, extra: str = "", lock=None):
     alex = R.person_by_id(conn, room["client_id"])
     chat = R.chat_text(conn, room["id"], limit=20)
     asked_scam = any("friends" in m["text"].lower() for m in chat if m["role"] == "client")
@@ -64,9 +64,11 @@ def _reply(conn, room, extra: str = ""):
         text = ""
     last = [m["text"] for m in chat if m["role"] == "client"][-1:] or [""]
     if text and text != last[0]:
-        R.say(conn, room["id"], alex["id"], text[:400])
-        from . import protect as P
+        mid = R.say(conn, room["id"], alex["id"], text[:400])
+        from . import protect as P, watch as WA
         P.scan(conn, room, alex, text)
+        if WA.check(conn, R.get(conn, room["id"]), mid, alex) == "drafted" and lock is not None:
+            react(conn, lock, room["id"], "terms")
 
 
 def react(conn, lock, room_id: int, event: str):
@@ -78,7 +80,7 @@ def react(conn, lock, room_id: int, event: str):
                 return
             alex = R.person_by_id(conn, room["client_id"])
             if event == "message":
-                _reply(conn, room)
+                _reply(conn, room, lock=lock)
             elif event == "terms":
                 t = T.latest(conn, room_id)
                 d = t["data"] if t else {}
@@ -87,9 +89,9 @@ def react(conn, lock, room_id: int, event: str):
                     T.accept(conn, room, alex)
                 _reply(conn, room, "The terms just appeared on the deal card. " + (
                     "They look fair to Alex: say he accepted them." if fair else
-                    "Alex hasn't accepted: ask about what is missing or too expensive."))
+                    "Alex hasn't accepted: ask about what is missing or too expensive."), lock=lock)
             elif event == "invoice":
-                _reply(conn, room, "Maya just made the invoice. Say you'll pay the deposit now with the PayPal button.")
+                _reply(conn, room, "Maya just made the invoice. Say you'll pay the deposit now with the PayPal button.", lock=lock)
                 R.note(conn, room_id, "info", "To pay as Alex, switch to Alex at the top: PayPal needs a real person "
                                               "to approve a payment, even in the sandbox.")
             elif event == "delivery":
@@ -100,5 +102,5 @@ def react(conn, lock, room_id: int, event: str):
                     seen = dv["check"].get("seen") or ""
                     _reply(conn, room, ("Alex opened the file. What it shows: " + seen + " It doesn't match: " + ", ".join(bad) +
                                         ". Politely ask for a fix, using one of the revisions.") if bad else
-                           "Alex opened the file and loves it. Thank Maya and say you'll pay the rest.")
+                           "Alex opened the file and loves it. Thank Maya and say you'll pay the rest.", lock=lock)
     threading.Thread(target=run, daemon=True).start()

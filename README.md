@@ -18,7 +18,9 @@ Illustrators, designers, video editors and writers find clients on Instagram, Di
 
 Everything about a job happens in one room, and everything is recorded with a time:
 
-1. **The chat becomes the contract.** NVIDIA Nemotron reads the conversation and drafts the terms (price, deposit, revisions, delivery). Both people accept them.
+1. **The chat becomes the contract.** NVIDIA Nemotron reads the conversation and drafts the terms (price, deposit, revisions, delivery) as soon as there's a price. Both people accept them.
+   - **It keeps up with the chat.** If someone changes the deal before anything is paid ("can the background be red?"), the terms are re-drafted and both accept again. Once money has moved, the agreed terms never change.
+   - **New work gets its own deal.** "Can I have another portrait?" after a paid job: DealRoom offers to start a new deal for the same two people, copies the messages about it and drafts its terms ("same price" refers to the earlier deal, which is in the record).
 2. **One tap makes the PayPal invoice** and a PDF copy, written from the accepted terms: tips off, the deposit as the minimum first payment.
 3. **The client pays with the PayPal button in the room.** The order is created by the server from the terms, so the amount is locked: the overpayment trick is impossible. Refunds only go back to the original payment.
 4. **The freelancer delivers the file in the room.** Nemotron looks at it and checks it against the terms ("Blue background ✗"). The client's download is recorded.
@@ -42,7 +44,7 @@ DealRoom never decides a dispute and never moves money on its own. PayPal decide
 
 | Job | Model |
 |---|---|
-| Turn the chat into terms; write the dispute statements and assessment | `nvidia/nemotron-3-super-120b-a12b` |
+| Turn the chat into terms; notice when a message agrees, changes the deal or asks for new work; write the dispute statements and assessment | `nvidia/nemotron-3-super-120b-a12b` |
 | Check the delivered image against the terms | `nvidia/Nemotron-3.5-Super-VL` |
 | Classify what a message claims (for scam signals and the honesty check); play the demo's AI client | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
 
@@ -55,20 +57,23 @@ DealRoom never decides a dispute and never moves money on its own. PayPal decide
 
 ## How well it works, measured
 
-`tools/eval.py` runs the real Nemotron models on samples with known answers. "Wrong" means a wrong value kept without asking the people, the failure that matters. One run: 17 model calls, $0.003.
+`tools/eval.py` runs the real Nemotron models on samples with known answers. "Wrong" means a wrong value kept without asking the people, the failure that matters. One run: 28 model calls, $0.005.
 
 | What the AI does | Model | Result |
 |---|---|---|
 | Turn 6 chats into terms (24 values; one chat changes the price midway, one never reaches a deal) | Nemotron 3 Super | 24 of 24 right, **0 wrong** |
 | Check a delivered image against the terms (blue background vs red) | Nemotron 3.5 Super VL | 2 of 2 right |
 | Recognise what a message claims (10 messages, 5 of them complaints) | Nemotron 3 Nano | 5 of 5 complaints found, 0 false alarms |
-| Write the dispute report (3 runs) | Nemotron 3 Super | Sided with the honest freelancer 3 of 3 times; the grounding filter removed 9 of 19 sentences that weren't fully backed by the record |
+| Notice what a message does to the deal: agreed, a change, new work, or nothing (11 messages, including real typos from testing) | Nemotron 3 Super | 11 of 11 right, in 3 runs out of 3 |
+| Write the dispute report (3 runs) | Nemotron 3 Super | Sided with the honest freelancer 3 of 3 times; the grounding filter removed 11 of 21 sentences that weren't fully backed by the record |
 
 **What the first runs caught, and what we changed** (each now has a test):
 
 1. "I'll pay everything upfront" came back as a deposit equal to the price, which would have created a $0 final payment. A deposit equal to the price is now one full payment.
 2. "The background isn't blue like I asked" and "I want my money back" never reached the AI: the quick word filter in front of it was too narrow. It now lets every likely complaint through, and the AI decides.
 3. The dispute statements first came back without citations, so the filter removed all of them. Each sentence now comes with the list of events it relies on, checked by code.
+4. In a hands-on test, a client asked for a second portrait after the first was paid, and nothing happened: the room only knew one job. It now notices new work and changes. Nemotron 3 Nano got only 7 of 11 of these messages right, so this job moved to Nemotron 3 Super with clearer rules (11 of 11).
+5. "I'll send half now and the rest when it's done" set off the "never send money back" warning. The pattern now only matches sending money back.
 
 ## What's real and what's a sample
 
@@ -82,7 +87,7 @@ DealRoom never decides a dispute and never moves money on its own. PayPal decide
 
 ## Tests
 
-`python -m unittest discover tests` runs 37 tests offline in under 2 seconds, with the AI and PayPal stood in: private copies per visitor, terms checked against the chat, both sides must accept, amounts locked to the terms, only the client pays, invoice PDF, delivery and download records, the AI file check, scam warnings, the private honesty check (and that the other person never sees it), the grounding filter, the evidence report, the private warning when the record supports the client, and verified PayPal webhooks landing in the right room (once, even if sent twice), and the AI client never claiming a payment PayPal hasn't confirmed.
+`python -m unittest discover tests` runs 46 tests offline in a few seconds, with the AI and PayPal stood in: private copies per visitor, terms checked against the chat, both sides must accept, amounts locked to the terms, only the client pays, invoice PDF, delivery and download records, the AI file check, scam warnings, the private honesty check (and that the other person never sees it), the grounding filter, the evidence report, the private warning when the record supports the client, and verified PayPal webhooks landing in the right room (once, even if sent twice), the AI client never claiming a payment PayPal hasn't confirmed, terms that follow the chat until money moves, and new work becoming its own deal.
 
 ## The demo
 
@@ -90,7 +95,7 @@ Open the site and choose a story. Each visitor gets a private copy, deleted afte
 
 - **A new deal, with an AI client:** you play Maya; Alex is played by NVIDIA Nemotron, labelled "Alex (AI)". He negotiates, tries one classic scam (paying as Friends & Family), accepts fair terms, downloads your delivery and reacts to it. He can't claim a payment PayPal hasn't confirmed: code drops any such message. Switch to Alex only to pay with PayPal.
 - **A new deal:** play both sides. Chat as Alex and Maya, draft the terms, accept, make the invoice, pay with PayPal as Alex, deliver as Maya. To pay, log in to the PayPal window with the sandbox buyer below.
-- **A deal gone wrong:** a paid, delivered deal (its past payments are recorded samples). As Alex, write "I never received the file" and see the private check, then open a dispute; as Maya, prepare and send the evidence.
+- **A deal gone wrong:** a paid, delivered deal (its past payments are recorded samples). As Alex, write "I never received the file" and see the private check, then open a dispute; as Maya, prepare and send the evidence. Or ask for another portrait and start a new deal.
 
 **PayPal sandbox buyer (fake money):** BUYER_EMAIL_PENDING / password: BUYER_PASSWORD_PENDING
 
@@ -113,11 +118,12 @@ dealroom/terms.py      chat to terms (Nemotron), checked against the chat
 dealroom/billing.py    invoice, locked PayPal orders, captures
 dealroom/delivery.py   file, fingerprint, downloads, AI check against the terms
 dealroom/protect.py    scam signals, private honesty check, shared facts
+dealroom/watch.py      keeps up with the chat: agreement, changes, new work as a new deal
 dealroom/client_ai.py  the demo's AI-played client (labelled), with its own rules
 dealroom/disputes.py   neutral timeline, grounded statements, evidence PDF, PayPal disputes
 dealroom/paypal.py     PayPal REST client (orders, invoices, refunds, disputes, webhooks)
 dealroom/llm.py        Nemotron on Nebius Token Factory, JSON answers, spending limits
-tests/                 37 automated tests
+tests/                 46 automated tests
 tools/eval.py          the measured evaluation above (needs a Nebius key, under 1 cent)
 ```
 

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["DEALROOM_DATA_DIR"] = tempfile.mkdtemp(prefix="dealroom-eval-")
 
-from dealroom import db, disputes as X, llm, protect as P, room as R, terms as T  # noqa: E402
+from dealroom import db, disputes as X, llm, protect as P, room as R, terms as T, watch as WA  # noqa: E402
 
 # chats with the terms they really agreed on: (lines, price, deposit, revisions, deadline word)
 CHATS = [
@@ -45,6 +45,24 @@ MESSAGES = [
     ("I want my money back", {"wants_refund"}), ("Love it, thank you so much!", set()),
     ("Can you make the eyes a bit bigger?", set()), ("Sent the deposit just now", set()),
     ("Got the file, downloading it now", set()), ("What time works for a call?", set()),
+]
+
+# the room keeping up with the chat: (deal so far, chat before, last message, what it is)
+DEAL = '{"item": "Digital portrait of Biscuit", "deliverables": ["dog portrait, blue background"], "price": 80, "deposit": 40, "revisions": 2, "deadline": "Friday"}'
+BEFORE = [("Alex", "client", "Hi Maya! Could you draw my dog Biscuit? Blue background please."),
+          ("Maya", "freelancer", "Sure! $80 with 2 revisions, ready Friday."), ("Alex", "client", "Can I pay half now?")]
+WATCHES = [
+    ("No terms yet.", BEFORE, ("Maya", "freelancer", "Yes, $40 now and $40 at delivery."), "agreed"),
+    ("No terms yet.", BEFORE[:1], ("Maya", "freelancer", "What size do you need?"), "none"),
+    (DEAL, BEFORE, ("Alex", "client", "Actually, can the background be red instead of blue?"), "change"),
+    (DEAL, BEFORE, ("Alex", "client", "Could you have it ready Thursday instead of Friday?"), "change"),
+    (DEAL, BEFORE, ("Alex", "client", "can i have another portait"), "new_work"),
+    (DEAL, BEFORE, ("Alex", "client", "Could you also draw my cat Luna, as a separate piece?"), "new_work"),
+    (DEAL, BEFORE, ("Maya", "freelancer", "2 days. can u pay half deposit for the new project with red background"), "new_work"),
+    (DEAL, BEFORE, ("Alex", "client", "Thanks, love it!"), "none"),
+    (DEAL, BEFORE, ("Alex", "client", "how much time is it gonna take"), "none"),
+    (DEAL, BEFORE, ("Alex", "client", "ok where is the invoice"), "none"),
+    (DEAL, BEFORE, ("Alex", "client", "I'll sue you"), "none"),
 ]
 
 
@@ -115,6 +133,21 @@ def eval_claims(log):
     return tp, fn, fp, c1[0] - c0[0], c1[1] - c0[1], time.time() - t0
 
 
+def eval_watch(log):
+    t0, c0 = time.time(), meter()
+    right = 0
+    for deal, before, (name, role, text), want in WATCHES:
+        lines = "\n".join(f"{n} ({r}): {t}" for n, r, t in before)
+        out = llm.ask(WA.WATCH, f"Current deal: {deal}\n\nChat before:\n{lines}\n\nLAST message, {name} ({role}): {text}",
+                      task="smart", max_tokens=120) or {}
+        got = out.get("kind")
+        right += got == want
+        if got != want:
+            log.append(f"watch \"{text}\": got {got}, expected {want}")
+    c1 = meter()
+    return right, len(WATCHES), c1[0] - c0[0], c1[1] - c0[1], time.time() - t0
+
+
 def eval_reports(log, runs=3):
     t0, c0 = time.time(), meter()
     conn = db.connect(Path(os.environ["DEALROOM_DATA_DIR"]) / "eval.sqlite3")
@@ -142,6 +175,12 @@ def eval_reports(log, runs=3):
     return kept, removed, supports, c1[0] - c0[0], c1[1] - c0[1], time.time() - t0
 
 
+def main_watch():
+    log = []
+    print(eval_watch(log))
+    print("\n".join(log))
+
+
 def main():
     if not llm.key():
         sys.exit("Set NEBIUS_API_KEY first.")
@@ -149,16 +188,18 @@ def main():
     tt, tcalls, tusd, tsec = eval_terms(log)
     fr, fn_, fcalls, fusd, fsec = eval_files(log)
     tp, fn, fp, ccalls, cusd, csec = eval_claims(log)
+    wr, wn, wcalls, wusd, wsec = eval_watch(log)
     kept, removed, sup, rcalls, rusd, rsec = eval_reports(log)
     fmt = lambda t: f"{t['correct']} correct, {t['asked']} left for the people, **{t['wrong']} wrong**"
-    total_calls = tcalls + fcalls + ccalls + rcalls
-    total_usd = tusd + fusd + cusd + rusd
+    total_calls = tcalls + fcalls + ccalls + wcalls + rcalls
+    total_usd = tusd + fusd + cusd + wusd + rusd
     print(f"Run on {time.strftime('%Y-%m-%d')} against Nebius Token Factory: {total_calls} model calls, ${total_usd:.3f}.\n")
     print("| What the AI does | Model | Result |")
     print("|---|---|---|")
     print(f"| Turn 6 chats into terms (24 values; one chat changes the price, one never agrees on terms) | Nemotron 3 Super | {fmt(tt)} |")
     print(f"| Check a delivered image against the terms (blue background vs red) | Nemotron 3.5 Super VL | {fr} of {fn_} right |")
     print(f"| Recognise what a message claims (10 messages, 5 claims) | Nemotron 3 Nano | {tp} of {tp + fn} claims found, {fp} false alarms |")
+    print(f"| Notice what a chat message does to the deal (agreed, a change, new work, nothing; 11 messages) | Nemotron 3 Super | {wr} of {wn} right |")
     print(f"| Dispute report, 3 runs: sentences kept vs removed by the grounding filter | Nemotron 3 Super | {kept} kept, {removed} removed; "
           f"sided with the freelancer in {sup.count('freelancer')} of {len(sup)} (the record supports her) |")
     print("\nDetails:\n")
@@ -167,4 +208,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_watch() if "--watch" in sys.argv else main()

@@ -76,6 +76,7 @@
     try {
       const r = await fetch(f.action, {method: 'POST', body: fd});
       const d = await r.json().catch(() => ({}));
+      if (d.go) { location.href = d.go; return; }
       if (d.warning) {   // the private honesty check, before a dispute is opened
         priv.innerHTML = `<div class="tag">Only you can see this</div><div>${esc(d.warning)}</div>`;
         priv.hidden = false;

@@ -15,7 +15,7 @@ OFF_PLATFORM = re.compile(r"friends\s*(?:&|and)\s*family|\bf\s*&\s*f\b|\bzelle\b
                           r"\busdt\b|western union|gift ?card|whatsapp|telegram|outside (?:of )?(?:the )?(?:app|room|paypal)|"
                           r"pay me directly|send (?:it|money) directly", re.I)
 REFUND_ASK = re.compile(r"(?:sent|paid|transferred).{0,30}(?:too much|extra|by mistake|twice)|"
-                        r"(?:send|give|transfer).{0,20}(?:back|the difference|the rest)", re.I)
+                        r"(?:send|give|transfer|return).{0,20}(?:back|the difference)", re.I)
 LINK = re.compile(r"https?://\S+|www\.\S+", re.I)
 # a cheap first filter, wide on purpose: the AI decides what the message really claims
 CLAIMS = re.compile(r"receiv|never got|didn'?t get|not get|deliver|download|paid|pay|not what|wrong|asked|ask for|"

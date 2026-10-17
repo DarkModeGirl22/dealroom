@@ -1,11 +1,18 @@
 {% set t = state.terms %}{% set d = t.data if t else {} %}{% set dv = state.delivery %}{% set x = state.dispute %}
 {% set agreed = t and t.agreed %}{% set paid_all = state.parts and not (state.parts|rejectattr('paid')|list) %}
 <h2 class="card-title">Deal card</h2>
+{% if state.new_work %}
+<section class="newwork">
+  <p class="small"><strong>New work asked in the chat:</strong> {{ state.new_work.title }}</p>
+  <form data-ajax method="post" action="/r/{{ room.id }}/newdeal"><button class="btn">Start a new deal</button></form>
+  <p class="small muted">Its own terms, invoice and record. This deal stays as agreed.</p>
+</section>
+{% endif %}
 
 <section class="step {{ 'done' if agreed else 'now' }}">
   <h3><span class="num">1</span> Terms {% if agreed %}<span class="badge good">agreed</span>{% endif %}</h3>
   {% if not t %}
-    <p class="small muted">Talk about the job in the chat. Then DealRoom turns the conversation into terms you both accept.</p>
+    <p class="small muted">Talk about the job in the chat. As soon as there's a price, DealRoom turns the conversation into terms you both accept.</p>
     <form data-ajax method="post" action="/r/{{ room.id }}/terms/draft"><button class="btn" {{ 'disabled' if not state.ai }}>Draft terms from our chat</button></form>
   {% else %}
     <dl>

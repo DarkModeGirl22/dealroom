@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest import mock
 
-from dealroom import billing as B, db, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T
+from dealroom import billing as B, db, delivery as D, disputes as X, llm, paypal, protect as P, room as R, terms as T, watch as WA
 from dealroom.app import create_app
 
 CHAT = [("alex", "Hi Maya! Can you draw my dog Biscuit? Blue background please"),
@@ -194,6 +194,10 @@ class Protection(Base):
         self.say("alex", "Oops I sent too much, can you send back $40?")
         self.assertIn("Never send money back by hand", self.notes()[-1]["text"])
 
+    def test_paying_the_rest_later_is_not_a_scam(self):
+        self.say("alex", "I'll send half now and the rest when it's done")
+        self.assertEqual(self.notes(), [])
+
     def test_link_warning_is_private_to_the_other_person(self):
         self.say("alex", "pay here www.example-pay.com")
         self.assertTrue(self.notes("maya", "private"))
@@ -318,6 +322,94 @@ class Screens(Base):
         self.assertEqual(self.c.get("/r/1?as=alex").status_code, 200)
         self.agree()
         self.assertIn("Invoice and payment", self.c.get("/r/1/feed?as=alex").json["card"])
+
+
+
+class KeepsUpWithTheChat(Base):
+    """The room notices when people agree, change the deal, or ask for new work."""
+
+    def watch(self, who, text, kind, terms=None, title=None):
+        mid = R.say(self.conn, 1, R.person(self.conn, who)["id"], text)
+        answers = [{"kind": kind, "title": title}] + ([dict(terms)] if terms else [])
+        with mock.patch.object(llm, "available", return_value=True), mock.patch.object(llm, "ask", side_effect=answers):
+            return WA.check(self.conn, R.get(self.conn, 1), mid, R.person(self.conn, who))
+
+    def test_agreeing_in_the_chat_drafts_the_terms(self):
+        for who, t in CHAT[:-1]:
+            self.say(who, t)
+        self.assertEqual(self.watch("maya", CHAT[-1][1], "agreed", GOOD_TERMS), "drafted")
+        self.assertEqual(T.latest(self.conn, 1)["data"]["price"], 80)
+
+    def test_a_change_before_payment_updates_the_terms(self):
+        self.agree()
+        red = dict(GOOD_TERMS, deliverables=["digital portrait, red background"])
+        self.watch("alex", "Actually, can the background be red instead of blue?", "change", red)
+        t = T.latest(self.conn, 1)
+        self.assertEqual(t["version"], 2)
+        self.assertFalse(t["agreed"])   # both accept again
+
+    def test_agreeing_on_more_after_a_draft_updates_it(self):
+        self.agree()
+        T.edit(self.conn, 1, self.maya, {"deposit": ""})
+        self.watch("maya", "Yes, half now ($40) and $40 at delivery. Deal?", "agreed", GOOD_TERMS)
+        self.assertEqual(T.latest(self.conn, 1)["data"]["deposit"], 40)
+
+    def test_no_new_version_when_nothing_changed(self):
+        self.agree()
+        self.watch("maya", "So $80 with 2 revisions, Friday", "change", GOOD_TERMS)
+        self.assertEqual(T.latest(self.conn, 1)["version"], 1)
+
+    def test_paid_terms_are_never_rewritten(self):
+        self.agree()
+        self.pay_all()
+        self.watch("alex", "Can it be $60 instead?", "change", dict(GOOD_TERMS, price=60))
+        self.assertEqual(T.latest(self.conn, 1)["version"], 1)
+        self.assertIn("under way", self.notes()[-1]["text"])
+
+    def test_new_work_becomes_its_own_deal(self):
+        self.agree()
+        self.pay_all()
+        self.deliver()
+        self.say("alex", "Thanks, love it!")
+        self.assertEqual(self.watch("alex", "Can I have another portrait, this time with a red background?", "new_work",
+                                    title="Portrait, red background"), "suggested")
+        self.say("maya", "Sure, same price")
+        card = self.c.get("/r/1/feed?as=maya").json["card"]
+        self.assertIn("Start a new deal", card)
+        with mock.patch.object(llm, "ask", return_value=None):
+            go = self.c.post("/r/1/newdeal", data={"as": "maya"}).json["go"]
+        new = R.get(self.conn, 2)
+        self.assertEqual((new["title"], new["freelancer_id"], new["client_id"]),
+                         ("Portrait, red background", self.maya["id"], self.alex["id"]))
+        copied = [m["text"] for m in R.chat_text(self.conn, 2)]
+        self.assertEqual(copied, ["Can I have another portrait, this time with a red background?", "Sure, same price"])
+        self.assertEqual(T.latest(self.conn, 1)["version"], 1)              # the first deal stays as agreed
+        self.assertNotIn("Start a new deal", self.c.get("/r/1/feed?as=maya").json["card"])
+        page = self.c.get(go).get_data(as_text=True)
+        self.assertIn("Portrait, red background", page)
+        self.assertIn("Dog portrait", page)                                   # the deal switcher lists both
+
+    def test_new_work_is_announced_once(self):
+        self.agree()
+        self.pay_all()
+        self.watch("alex", "can i have another portrait", "new_work", title="Another portrait")
+        self.watch("alex", "this time red background", "new_work", title="Portrait, red background")
+        said = [n for n in self.notes() if "New work came up" in n["text"]]
+        self.assertEqual(len(said), 1)
+        self.assertEqual(WA.suggestion(R.get(self.conn, 1))["title"], "Portrait, red background")
+
+    def test_same_price_can_refer_to_the_earlier_deal(self):
+        self.agree()
+        self.pay_all()
+        self.watch("alex", "Another portrait please, red background", "new_work", title="Red portrait")
+        self.say("maya", "Sure, same price as last time")
+        with mock.patch.object(llm, "ask", return_value=None):
+            self.c.post("/r/1/newdeal", data={"as": "maya"})
+        chat = R.chat_text(self.conn, 2)
+        terms, dropped = T.check(dict(GOOD_TERMS, deadline=None), chat, T._earlier(self.conn, 2))
+        self.assertEqual(terms["price"], 80)      # from the earlier deal, which is in the record
+        bad, _ = T.check(dict(GOOD_TERMS, price=95, deadline=None), chat, T._earlier(self.conn, 2))
+        self.assertIsNone(bad["price"])          # a number nobody said is still dropped
 
 
 if __name__ == "__main__":

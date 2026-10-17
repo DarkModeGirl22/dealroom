@@ -10,6 +10,8 @@ from . import db, llm, room as R
 SYSTEM = (
     "You read a chat between a freelancer and a client and write the terms they agreed on, as JSON. "
     "Only use what the chat says. Never invent a price, date or number. If something was not agreed, use null. "
+    "If an earlier deal is given and the chat refers to it (\"same price\", \"like last time\"), use the earlier "
+    "deal's value. A deadline can be relative, written as said (\"2 days\"). "
     "Reply JSON only: {\"item\": short name of the work, \"deliverables\": [what will be delivered, including the specific details the client asked for, such as subject, colors, background, size or format], "
     "\"price\": total price as a number or null, \"deposit\": amount paid before work starts or null, "
     "\"revisions\": number of revisions included or null, \"deadline\": delivery date or day as written or null, "
@@ -28,9 +30,12 @@ def _numbers_in(text: str) -> set[float]:
     return found
 
 
-def check(draft: dict, chat: list[dict]) -> tuple[dict, list[str]]:
-    """Keep a value only if the chat supports it. Returns (terms, notes on what was dropped)."""
+def check(draft: dict, chat: list[dict], earlier: dict | None = None) -> tuple[dict, list[str]]:
+    """Keep a value only if the chat supports it (or the earlier deal it refers to, e.g. "same price").
+    Returns (terms, notes on what was dropped)."""
     allt = "\n".join(m["text"] for m in chat)
+    if earlier:
+        allt += "\n" + " ".join(str(earlier.get(k)) for k in ("price", "deposit", "revisions", "deadline") if earlier.get(k) is not None)
     nums = _numbers_in(allt)
     out, dropped = {}, []
     out["item"] = (draft.get("item") or "Work")[:80]
@@ -66,6 +71,13 @@ def check(draft: dict, chat: list[dict]) -> tuple[dict, list[str]]:
     return out, dropped
 
 
+def _earlier(conn, room_id) -> dict | None:
+    """The agreed terms of the deal this one was started from, if any."""
+    r = db.one(conn, "SELECT parent_id FROM room WHERE id=?", room_id)
+    t = latest(conn, r["parent_id"]) if r and r["parent_id"] else None
+    return t["data"] if t and t["agreed"] else None
+
+
 def latest(conn, room_id):
     t = db.one(conn, "SELECT * FROM terms WHERE room_id=? ORDER BY version DESC LIMIT 1", room_id)
     if not t:
@@ -76,17 +88,41 @@ def latest(conn, room_id):
     return d
 
 
-def draft(conn, room_id) -> dict | None:
+def _words(d: dict) -> set:
+    return set(re.findall(r"[a-z0-9]+", " ".join(map(str, d.get("deliverables") or [])).lower())) - STOP
+
+
+STOP = {"a", "an", "the", "of", "on", "with", "in", "and", "to", "for", "digital", "portrait", "file"}
+
+
+def same(a: dict, b: dict) -> bool:
+    """Same deal: the same numbers and deadline, and no new detail in the deliverables."""
+    keys = ("price", "deposit", "revisions")
+    if any(a.get(k) != b.get(k) for k in keys):
+        return False
+    if (a.get("deadline") or "").lower() != (b.get("deadline") or "").lower():
+        return False
+    return _words(b) <= _words(a)
+
+
+def draft(conn, room_id, why: str | None = None, only_if_changed: bool = False) -> dict | None:
     chat = R.chat_text(conn, room_id)
     if not chat:
         return None
     lines = "\n".join(f"[{m['id']}] {m['name']} ({m['role']}): {m['text']}" for m in chat)
+    earlier = _earlier(conn, room_id)
+    if earlier:
+        lines = ("Earlier deal between the same two people, for references like \"same price\": " +
+                 json.dumps({k: earlier.get(k) for k in ("item", "price", "deposit", "revisions", "deadline")}) +
+                 "\n\nChat about this new deal:\n" + lines)
     raw = llm.ask(SYSTEM, lines, task="smart", max_tokens=600)
     if not raw:
         R.note(conn, room_id, "warn", "DealRoom couldn't read the terms right now. Please write them on the deal card.")
         return None
-    terms, dropped = check(raw, chat)
+    terms, dropped = check(raw, chat, earlier)
     prev = latest(conn, room_id)
+    if only_if_changed and prev and same(prev["data"], terms):
+        return None
     version = (prev["version"] + 1) if prev else 1
     db.insert(conn, "terms", room_id=room_id, version=version, data=json.dumps(terms), source="ai", ts=db.now())
     bits = [f"{terms['item']}"]
@@ -98,7 +134,9 @@ def draft(conn, room_id) -> dict | None:
         bits.append(f"{terms['revisions']} revisions")
     if terms["deadline"]:
         bits.append(f"due {terms['deadline']}")
-    msg = "Terms drafted from your chat by " + llm.LABELS["smart"] + ": " + ", ".join(bits) + ". Both of you, check and accept on the deal card."
+    msg = (f"{why}, so " if why else "") + ("terms drafted" if not why else "here are the terms, drafted") + \
+        " from your chat by " + llm.LABELS["smart"] + ": " + ", ".join(bits) + ". Both of you, check and accept on the deal card."
+    msg = msg[0].upper() + msg[1:]
     if dropped:
         msg += " Not clear from the chat: " + ", ".join(dropped) + "."
     missing = [m for m in (raw.get("missing") or []) if isinstance(m, str)][:3]

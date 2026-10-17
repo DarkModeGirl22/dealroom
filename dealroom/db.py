@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS person (
   id INTEGER PRIMARY KEY, key TEXT UNIQUE, name TEXT, role TEXT, email TEXT);
 CREATE TABLE IF NOT EXISTS room (
   id INTEGER PRIMARY KEY, title TEXT, freelancer_id INTEGER, client_id INTEGER,
-  status TEXT DEFAULT 'talking', story TEXT, created TEXT);
+  status TEXT DEFAULT 'talking', story TEXT, created TEXT, suggest TEXT, parent_id INTEGER);
 CREATE TABLE IF NOT EXISTS message (
   id INTEGER PRIMARY KEY, room_id INTEGER, sender_id INTEGER,
   kind TEXT DEFAULT 'chat',          -- chat | note (AI or system, shared) | private (one person only)
@@ -56,6 +56,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    for col in ("suggest TEXT", "parent_id INTEGER"):   # copies made before these columns existed
+        try:
+            conn.execute(f"ALTER TABLE room ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
