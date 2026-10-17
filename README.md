@@ -1,7 +1,6 @@
 # DealRoom
 
-*One room per job for digital freelancers paid through PayPal. If you did nothing wrong, you can't be made to look bad.*
-
+*Protection for digital freelancers paid through PayPal: every message, payment and delivery is recorded, so if you did nothing wrong, the record proves it.*
 **Try it online:** LIVE_LINK_PENDING (choose a story; each visitor gets a private copy). The first load can take up to a minute on the free server.
 
 ## The problem
