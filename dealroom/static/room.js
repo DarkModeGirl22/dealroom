@@ -4,7 +4,7 @@
   const roomId = root.dataset.room, as = root.dataset.as, me = Number(root.dataset.me);
   const feed = document.getElementById('feed'), card = document.getElementById('card');
   const form = document.getElementById('say'), input = document.getElementById('text');
-  let last = 0, busy = false;
+  let last = 0, busy = false, lastDeal = null;
 
   const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const time = ts => {
@@ -15,6 +15,15 @@
   };
 
   function render(m) {
+    if (m.deal !== lastDeal) {   // one conversation, several deals: say where each one starts
+      if (lastDeal !== null || feed.dataset.multi === '1') {
+        const dv = document.createElement('div');
+        dv.className = 'divider';
+        dv.textContent = m.deal;
+        feed.appendChild(dv);
+      }
+      lastDeal = m.deal;
+    }
     const el = document.createElement('div');
     if (m.kind === 'chat') {
       el.className = 'msg ' + (m.sender_id === me ? 'mine' : 'theirs');
@@ -34,6 +43,7 @@
       const r = await fetch(`/r/${roomId}/feed?as=${as}&after=${last}`);
       const d = await r.json();
       const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+      feed.dataset.multi = d.multi ? '1' : '0';
       d.messages.forEach(m => { render(m); last = Math.max(last, m.id); });
       if (d.messages.length && (atBottom || last === d.messages.at(-1).id)) feed.scrollTop = feed.scrollHeight;
       if (card.dataset.html !== d.card && !card.dataset.hold) { card.dataset.html = d.card; card.innerHTML = d.card; buttons(); }

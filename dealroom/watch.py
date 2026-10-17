@@ -12,18 +12,22 @@ import threading
 
 from . import billing as B, db, delivery as D, llm, room as R, terms as T
 
-KINDS = ("agreed", "change", "new_work", "none")
+KINDS = ("agreed", "offer", "change_asked", "change_agreed", "new_work", "none")
 WATCH = (
-    "You read a chat between a freelancer and a client in a deal room. Classify ONLY the LAST message, using the "
-    "current deal and the chat before it as context. Reply JSON only: {\"kind\": one of\n"
-    "\"agreed\": there are no terms yet, and this message completes an agreement on the work and its price "
-    "(for example the freelancer confirms the price and payment plan the client asked about).\n"
-    "\"change\": there are terms, and this message asks to change one of them for the SAME piece of work "
-    "(its price, deposit, revisions, deadline, or a detail such as a color).\n"
+    "You read a chat between a freelancer and a client in a deal room, in any language. Classify ONLY the LAST "
+    "message, using the current deal and the chat before it as context. Reply JSON only: {\"kind\": one of\n"
+    "\"offer\": a quote, a price or a counter-offer the other person hasn't accepted yet (\"It's $500\", "
+    "\"can you do 60?\", \"I was hoping for $80\").\n"
+    "\"agreed\": there are no terms yet, and this message ACCEPTS the other person's offer, so both now agree on the "
+    "work and its price (\"ok deal\", \"great, thanks!\", \"perfect\" or \"sounds good\" right after a quote, or the "
+    "freelancer saying yes to the payment plan the client asked for).\n"
+    "\"change_asked\": there are terms, and this message ASKS to change one of them (\"can the background be red "
+    "instead?\", \"can we lower it to $60?\"). Asking is not agreeing.\n"
+    "\"change_agreed\": there are terms, and this message ACCEPTS a change the other person asked for (\"sure, red "
+    "it is\"), or gives something up on its own (the freelancer offering a lower price or an earlier date).\n"
     "\"new_work\": this message asks for, offers or prices ANOTHER piece of work beyond the current deal "
-    "(another portrait, a second item, \"the new project\"), even if the details differ.\n"
-    "\"none\": anything else. Questions, answers to questions, thanks, praise, asking where the invoice or file "
-    "is, complaints and threats are none.\n"
+    "(another portrait, a second item, \"the new project\").\n"
+    "\"none\": anything else: questions, thanks that don't answer an offer, small talk, asking where the invoice or file is, complaints, threats.\n"
     "\"title\": if new_work, a short name for the new work (2 to 5 words), else null}"
 )
 
@@ -37,7 +41,7 @@ def _deal(conn, room):
 
 
 def classify(conn, room, msg_id: int) -> dict:
-    chat = R.chat_text(conn, room["id"], limit=12)
+    chat = R.thread_text(conn, room, limit=12)
     if not chat or chat[-1]["id"] != msg_id:
         chat = [m for m in chat if m["id"] <= msg_id]
     if not chat:
@@ -47,7 +51,9 @@ def classify(conn, room, msg_id: int) -> dict:
     last = chat[-1]
     out = llm.ask(WATCH, f"Current deal: {deal}\n\nChat before:\n{lines or '(nothing)'}\n\n"
                          f"LAST message, {last['name']} ({last['role']}): {last['text']}", task="smart", max_tokens=120) or {}
-    kind = out.get("kind") if out.get("kind") in KINDS else "none"
+    raw = out.get("kind") if out.get("kind") in KINDS else "none"
+    # only what both people agreed moves the terms; offers and requests stay in the chat
+    kind = {"change_agreed": "change", "offer": "none", "change_asked": "asked"}.get(raw, raw)
     title = str(out.get("title") or "").strip()[:60] or "New job"
     return {"kind": kind, "title": title}
 
@@ -82,7 +88,7 @@ def check(conn, room, msg_id: int, sender) -> str | None:
         if T.draft(conn, room["id"], why=why, only_if_changed=bool(t)):
             return "drafted"
         return None
-    if kind == "change" and t and under_way(conn, room):
+    if kind in ("change", "asked") and t and under_way(conn, room):
         rev = t["data"].get("revisions")
         R.note(conn, room["id"], "info", "This deal is already under way, so its terms stay as agreed. A fix to the same "
                "work uses one of the revisions" + (f" ({rev} included)" if rev is not None else "") +
@@ -111,18 +117,16 @@ def set_suggestion(conn, room, value: dict | None):
 
 
 def start_new_deal(conn, room) -> int | None:
-    """New work becomes its own room: same two people, the messages about it copied over, terms drafted."""
+    """New work becomes its own deal in the same conversation: the messages about it move to it, terms are drafted."""
     s = suggestion(room)
     if not s:
         return None
     rid = db.insert(conn, "room", title=s["title"][:60], freelancer_id=room["freelancer_id"],
                     client_id=room["client_id"], status="talking", story=room["story"], created=db.now(),
                     parent_id=room["id"])
-    rows = db.all_(conn, "SELECT * FROM message WHERE room_id=? AND kind='chat' AND id>=? ORDER BY id", room["id"], s["from"])
-    for m in rows:
-        db.insert(conn, "message", room_id=rid, sender_id=m["sender_id"], kind="chat", text=m["text"], ts=m["ts"])
-    R.note(conn, rid, "info", f"New deal, started from \"{room['title']}\". The messages about this job were copied "
-           "here; everything from now on is recorded in this deal.")
-    R.note(conn, room["id"], "good", f"A new deal was started for \"{s['title']}\". This deal stays as it was agreed.")
+    conn.execute("UPDATE message SET room_id=? WHERE room_id=? AND kind='chat' AND id>=?", (rid, room["id"], s["from"]))
+    conn.commit()
+    R.note(conn, rid, "info", f"New deal: \"{s['title']}\". The messages about it now belong to this deal, with its own "
+           f"terms, invoice and record. \"{room['title']}\" stays as it was agreed.")
     set_suggestion(conn, room, None)
     return rid

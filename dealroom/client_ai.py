@@ -18,6 +18,8 @@ PERSONA = (
     "digital portrait of his dog Biscuit (a light brown dog with floppy ears) on a blue background. His budget is "
     "about $80 and he'd like to pay half before and half at delivery. He wants 2 revisions. He wants it by Friday. "
     "Alex is the client: he pays Maya, through the PayPal button on the deal card; Maya never pays Alex. "
+    "The button appears after both accept the terms and Maya makes the invoice: never ask for a PayPal link, an "
+    "email or any other way to pay. Maya makes the invoices, never Alex. "
     "Write short, natural chat messages (1 or 2 sentences), like texting. Never invent payments you didn't make. "
     "{extra}\nReply JSON only: {{\"message\": \"Alex's next message\"}}"
 )
@@ -37,19 +39,26 @@ def _state(conn, room) -> str:
             {k: t["data"].get(k) for k in ("item", "price", "deposit", "revisions", "deadline")}) +
             ("; both accepted" if t["agreed"] else "; not accepted by both yet"))
         if t["invoice_number"]:
-            bits.append("Invoice made.")
-    paid = [p["part"] for p in B.parts(conn, room) if p["paid"]]
+            bits.append("Invoice made: the PayPal button is on the deal card.")
+        elif t["agreed"]:
+            bits.append("No invoice yet: Maya makes it from the deal card.")
+    parts = B.parts(conn, room)
+    paid = [p["part"] for p in parts if p["paid"]]
+    due = [f"the {p['part']} (${p['amount']:.2f})" for p in parts if not p["paid"]]
     bits.append("Alex has paid: " + (", ".join(paid) if paid else "NOTHING yet. Never say you paid or sent money."))
     dv = D.latest(conn, room["id"])
     if dv:
-        bits.append(f"Maya delivered a file; the check against the terms says: " +
+        bits.append("Maya has ALREADY delivered the file (the work is done; no future delivery date applies any more). "
+                    "The check against the terms says: " +
                     "; ".join(f"{c['requirement']} {c['result']}" for c in (dv["check"].get("checks") or [])))
+    if due:
+        bits.append("Still to pay: " + ", ".join(due) + (", due NOW because the file is delivered." if dv else "."))
     return "\n".join(bits) or "Nothing agreed yet."
 
 
 def _reply(conn, room, extra: str = "", lock=None):
     alex = R.person_by_id(conn, room["client_id"])
-    chat = R.chat_text(conn, room["id"], limit=20)
+    chat = R.thread_text(conn, room, limit=20)
     asked_scam = any("friends" in m["text"].lower() for m in chat if m["role"] == "client")
     mine = sum(1 for m in chat if m["role"] == "client")
     if not asked_scam and mine == 2 and not extra:
@@ -73,6 +82,10 @@ def _reply(conn, room, extra: str = "", lock=None):
 
 def react(conn, lock, room_id: int, event: str):
     """Run Alex's turn in the background, so Maya's screen never waits for the AI."""
+    first = R.get(conn, room_id)   # callers hold the lock; no thread at all for rooms without an AI client
+    if not first or not is_ai_room(first) or not llm.available():
+        return
+
     def run():
         with lock:
             room = R.get(conn, room_id)
@@ -102,5 +115,8 @@ def react(conn, lock, room_id: int, event: str):
                     seen = dv["check"].get("seen") or ""
                     _reply(conn, room, ("Alex opened the file. What it shows: " + seen + " It doesn't match: " + ", ".join(bad) +
                                         ". Politely ask for a fix, using one of the revisions.") if bad else
-                           "Alex opened the file and loves it. Thank Maya and say you'll pay the rest.", lock=lock)
+                           ("Alex opened the file and loves it. Thank Maya and say you'll pay what's left now with the PayPal button. "
+                            "Don't mention any delivery date: the file is already delivered.")
+                           if any(not p["paid"] for p in B.parts(conn, room)) else
+                           "Alex opened the file and loves it. Thank Maya; everything is already paid.", lock=lock)
     threading.Thread(target=run, daemon=True).start()

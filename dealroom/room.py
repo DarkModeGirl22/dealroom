@@ -7,11 +7,13 @@ from . import db
 DEMO_PEOPLE = [
     ("maya", "Maya", "freelancer", "maya.sample@example.com"),
     ("alex", "Alex", "client", "alex.sample@example.com"),
+    ("lina", "Lina", "client", "lina.sample@example.com"),
+    ("sam", "Sam", "client", "sam.sample@example.com"),
 ]
 STORIES_ORDER = ("ai", "wrong", "new")
 STORIES = {
-    "new": {"title": "A new deal", "line": "Maya draws pet portraits. Alex wants one of his dog. Play both sides: talk, "
-            "agree, pay with PayPal (sandbox), deliver."},
+    "new": {"title": "A new deal", "line": "Maya draws pet portraits; Alex wants one of his dog. Play both sides, the "
+            "seller and the buyer: talk, agree, pay with PayPal (sandbox), deliver."},
     "ai": {"title": "A new deal, with an AI client", "line": "You're Maya. Alex is played by NVIDIA Nemotron: he chats, "
            "accepts fair terms, tries one scam and checks your delivery. Switch to Alex only to pay with PayPal."},
     "wrong": {"title": "A deal gone wrong", "line": "Alex got his portrait two days ago and it was paid in full. Now he "
@@ -41,7 +43,52 @@ def seed(conn, story: str = "new"):
     if story == "ai":
         db.insert(conn, "message", room_id=rid, sender_id=ids["alex"], kind="chat", ts=db.now(),
                   text="Hi Maya! I love your pet portraits. Could you draw my dog Biscuit on a blue background?")
+    _seed_others(conn, ids)
     return rid
+
+
+def _seed_others(conn, ids):
+    """Maya's other conversations, so the list looks like a real inbox: a finished PDF job and a new request."""
+    import hashlib
+    import json
+    import shutil
+    m, lina, sam = ids["maya"], ids["lina"], ids["sam"]
+    r = db.insert(conn, "room", title="CV translation", freelancer_id=m, client_id=lina, status="agreed", story="sample",
+                  created=_ago(200))
+    for h, who, text in [(200, lina, "Hello Maya, could you translate my CV from French to English? It's 2 pages."),
+                         (199.5, m, "Of course: $40, 1 revision, ready in 3 days."),
+                         (199, lina, "Perfect, thank you!")]:
+        db.insert(conn, "message", room_id=r, sender_id=who, kind="chat", text=text, ts=_ago(h))
+    terms = {"item": "CV translation", "deliverables": ["CV translated from French to English", "2 pages"],
+             "price": 40.0, "deposit": None, "revisions": 1, "deadline": "3 days", "refund_policy": None}
+    db.insert(conn, "terms", room_id=r, version=1, data=json.dumps(terms), source="ai", accepted_freelancer=_ago(198.8),
+              accepted_client=_ago(198.7), invoice_number="DR-SAMPLE-2", ts=_ago(198.9))
+    db.insert(conn, "payment", room_id=r, part="full", amount=40.0, order_id="SAMPLE-ORDER-3", capture_id="SAMPLE-CAPTURE-3",
+              status="COMPLETED", payer_email="lina.sample@example.com", ts=_ago(198.5), paid_ts=_ago(198.4))
+    src = db.ROOT / "samples" / "cv_lina_english.pdf"
+    raw = src.read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    stored = db.UPLOADS / f"sample-{sha[:12]}.pdf"
+    if not stored.exists():
+        shutil.copy(src, stored)
+    check = {"seen": "A two-page CV for Lina Haddad, in English.",
+             "checks": [{"requirement": "Translated to English", "result": "yes", "evidence": "\"Marketing assistant with three years of experience\""},
+                        {"requirement": "2 pages", "result": "yes", "evidence": "the PDF has 2 pages"}]}
+    did = db.insert(conn, "delivery", room_id=r, filename="CV_Lina_Haddad_EN.pdf", stored=str(stored), sha256=sha,
+                    check_data=json.dumps(check), ts=_ago(150))
+    db.insert(conn, "download", delivery_id=did, person_id=lina, ip="sample", ts=_ago(149))
+    for h, lvl, who, text in [(198.7, "good", None, "Both accepted the terms (version 1). They're now part of the record."),
+                              (198.4, "good", None, "Payment of $40.00 received through PayPal. It matches the terms exactly. (sample)"),
+                              (150, "good", None, "NVIDIA Nemotron 3 Super checked the file against the terms: Translated to English ✓; 2 pages ✓."),
+                              (149, "good", None, "Lina downloaded \"CV_Lina_Haddad_EN.pdf\". Recorded in the room."),
+                              (148, None, lina, "Got it, it's perfect. Thanks!")]:
+        db.insert(conn, "message", room_id=r, sender_id=who, kind="chat" if who else "note", level=lvl, text=text, ts=_ago(h))
+    r = db.insert(conn, "room", title="Bakery logo", freelancer_id=m, client_id=sam, status="talking", story="sample",
+                  created=_ago(5))
+    for h, who, text in [(5, sam, "Hi! I'm opening a small bakery. Could you design a logo? Something warm, with a croissant."),
+                         (4.8, m, "I'd love to! Do you have colors in mind?"),
+                         (4.5, sam, "Brown and cream. What would it cost?")]:
+        db.insert(conn, "message", room_id=r, sender_id=who, kind="chat", text=text, ts=_ago(h))
 
 
 def _seed_wrong(conn, rid, ids):
@@ -96,6 +143,28 @@ def person_by_id(conn, pid):
     return db.one(conn, "SELECT * FROM person WHERE id=?", pid)
 
 
+def thread(conn, room):
+    """All deals between the same two people: one conversation, like a chat app."""
+    return db.all_(conn, "SELECT * FROM room WHERE freelancer_id=? AND client_id=? ORDER BY id",
+                   room["freelancer_id"], room["client_id"])
+
+
+def conversations(conn, p):
+    """The viewer's conversations, one per person, most recent first, with the last message."""
+    out = {}
+    for r in rooms_for(conn, p):
+        other_id = r["client_id"] if r["freelancer_id"] == p["id"] else r["freelancer_id"]
+        out.setdefault(other_id, []).append(r)
+    rows = []
+    for other_id, rooms in out.items():
+        ids = [r["id"] for r in rooms]
+        last = db.one(conn, f"""SELECT m.text, m.ts, m.kind FROM message m WHERE m.room_id IN ({",".join("?" * len(ids))})
+                               AND m.kind='chat' ORDER BY m.ts DESC, m.id DESC LIMIT 1""", *ids)
+        rows.append({"other": person_by_id(conn, other_id), "room": rooms[-1], "deals": len(rooms),
+                     "last": last["text"] if last else "", "ts": last["ts"] if last else rooms[-1]["created"]})
+    return sorted(rows, key=lambda x: x["ts"], reverse=True)
+
+
 def rooms_for(conn, p):
     return db.all_(conn, """SELECT r.*, f.name AS freelancer, c.name AS client FROM room r
                             JOIN person f ON f.id=r.freelancer_id JOIN person c ON c.id=r.client_id
@@ -134,11 +203,23 @@ def note(conn, room_id, level: str, text: str, data: dict | None = None, only_fo
 
 
 def feed(conn, room_id, viewer_id, after: int = 0):
-    rows = db.all_(conn, """SELECT m.*, p.name AS sender, p.key AS sender_key FROM message m
-                            LEFT JOIN person p ON p.id=m.sender_id
-                            WHERE m.room_id=? AND m.id>? AND (m.only_for IS NULL OR m.only_for=?)
-                            ORDER BY m.id""", room_id, after, viewer_id)
+    """The whole conversation with this person (every deal), in the order it happened, minus others' private notes."""
+    room = get(conn, room_id)
+    ids = [r["id"] for r in thread(conn, room)]
+    rows = db.all_(conn, f"""SELECT m.*, p.name AS sender, p.key AS sender_key, r.title AS deal FROM message m
+                            LEFT JOIN person p ON p.id=m.sender_id JOIN room r ON r.id=m.room_id
+                            WHERE m.room_id IN ({",".join("?" * len(ids))}) AND m.id>?
+                            AND (m.only_for IS NULL OR m.only_for=?) ORDER BY m.ts, m.id""", *ids, after, viewer_id)
     return [dict(r) | {"data": db.jload(r["data"])} for r in rows]
+
+
+def thread_text(conn, room, limit: int = 30) -> list[dict]:
+    """The whole conversation between the two people, as the AI client reads it."""
+    ids = [r["id"] for r in thread(conn, room)]
+    rows = db.all_(conn, f"""SELECT m.id, m.text, m.ts, p.name, p.role FROM message m JOIN person p ON p.id=m.sender_id
+                             WHERE m.room_id IN ({",".join("?" * len(ids))}) AND m.kind='chat'
+                             ORDER BY m.id DESC LIMIT ?""", *ids, limit)
+    return [dict(r) for r in reversed(rows)]
 
 
 def chat_text(conn, room_id, limit: int = 60) -> list[dict]:

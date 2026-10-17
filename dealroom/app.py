@@ -73,11 +73,9 @@ def create_app() -> Flask:
     @app.get("/r/<int:room_id>")
     def room_page(room_id):
         rm, p = load(room_id)
-        deals = R.rooms_for(g.conn, p)
-        first = rm["id"] == deals[0]["id"]   # the story's line belongs to its first deal only
         return render_template("room.html", room=rm, me=p, other=R.other(g.conn, rm, p), side=R.side(rm, p),
-                               story=R.STORIES.get(rm["story"]) if first else None, paypal_client_id=paypal.client_id(),
-                               deals=deals)
+                               story=R.STORIES.get(rm["story"]), paypal_client_id=paypal.client_id(),
+                               chats=R.conversations(g.conn, p))
 
     @app.post("/r/<int:room_id>/say")
     def say(room_id):
@@ -126,8 +124,9 @@ def create_app() -> Flask:
         rm, p = load(room_id)
         after = request.args.get("after", type=int, default=0)
         msgs = R.feed(g.conn, rm["id"], p["id"], after)
-        card = render_template("_card.html", room=rm, me=p, side=R.side(rm, p), state=state(rm))
-        return jsonify(messages=msgs, card=card)
+        deals = R.thread(g.conn, rm)
+        card = render_template("_card.html", room=rm, me=p, side=R.side(rm, p), state=state(rm), deals=deals)
+        return jsonify(messages=msgs, card=card, multi=len(deals) > 1)
 
     @app.post("/r/<int:room_id>/terms/draft")
     def terms_draft(room_id):

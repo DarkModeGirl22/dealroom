@@ -64,7 +64,9 @@ class PrivateCopies(Base):
         self.assertEqual(other.get("/r/1/feed?as=maya").json["messages"], [])
 
     def test_strangers_cant_open_the_room(self):
-        self.assertEqual(self.c.get("/r/1?as=sam").status_code, 404)
+        self.assertEqual(self.c.get("/r/1?as=nobody").status_code, 404)
+        self.assertEqual(self.c.get("/r/1?as=sam").status_code, 403)       # another client of Maya's
+        self.assertEqual(self.c.get("/r/1/feed?as=lina").status_code, 403)
 
     def test_story_two_is_a_finished_paid_deal(self):
         self.c.post("/start/wrong")
@@ -193,6 +195,15 @@ class Protection(Base):
     def test_send_money_back_warning(self):
         self.say("alex", "Oops I sent too much, can you send back $40?")
         self.assertIn("Never send money back by hand", self.notes()[-1]["text"])
+
+    def test_the_same_facts_are_never_repeated(self):
+        self.agree(); self.pay_all(); self.deliver()
+        self.c.get("/r/1/file/1?as=alex")
+        for _ in range(2):
+            self.c.post("/r/1/say", data={"as": "alex", "text": "I never received the file", "checked": "1"})
+        shared = [n for n in self.notes() if n["text"].startswith("Facts from the record")]
+        self.assertEqual(len(shared), 1)
+        self.assertIn("Report a problem", self.notes("alex", "private")[-1]["text"])
 
     def test_paying_the_rest_later_is_not_a_scam(self):
         self.say("alex", "I'll send half now and the rest when it's done")
@@ -325,6 +336,36 @@ class Screens(Base):
 
 
 
+class Conversations(Base):
+    """One conversation per person, like a chat app; every deal keeps its own record."""
+
+    def test_one_conversation_per_person(self):
+        chats = R.conversations(self.conn, self.maya)
+        self.assertEqual(sorted(c["other"]["name"] for c in chats), ["Alex", "Lina", "Sam"])
+        alex_side = R.conversations(self.conn, self.alex)
+        self.assertEqual([c["other"]["name"] for c in alex_side], ["Maya"])   # Alex never sees Maya's other clients
+
+    def test_the_conversation_shows_every_deal_but_records_stay_separate(self):
+        self.agree(); self.pay_all(); self.deliver()
+        mid = R.say(self.conn, 1, self.alex["id"], "Another portrait please, red background")
+        WA.set_suggestion(self.conn, R.get(self.conn, 1), {"title": "Red portrait", "from": mid})
+        with mock.patch.object(llm, "ask", return_value=None):
+            go = self.c.post("/r/1/newdeal", data={"as": "maya"}).json["go"]
+        nid = int(go.split("/r/")[1].split("?")[0])
+        feed = self.c.get(f"/r/{nid}/feed?as=maya").json
+        self.assertTrue(feed["multi"])
+        self.assertEqual({m["deal"] for m in feed["messages"]}, {"Dog portrait", "Red portrait"})
+        self.assertNotIn("Another portrait please, red background", [m["text"] for m in R.chat_text(self.conn, 1)])
+        self.assertNotIn("Red portrait", [e["what"] for e in X.timeline(self.conn, R.get(self.conn, 1))])
+        self.assertIn("Red portrait", feed["card"])        # the deal tabs
+        self.assertEqual(len(R.conversations(self.conn, self.maya)), 3)   # still one conversation with Alex
+
+    def test_other_clients_never_see_the_conversation(self):
+        self.say("maya", "Hello Alex")
+        lina = self.c.get("/r/2/feed?as=lina").json["messages"]
+        self.assertNotIn("Hello Alex", [m["text"] for m in lina])
+
+
 class KeepsUpWithTheChat(Base):
     """The room notices when people agree, change the deal, or ask for new work."""
 
@@ -343,7 +384,7 @@ class KeepsUpWithTheChat(Base):
     def test_a_change_before_payment_updates_the_terms(self):
         self.agree()
         red = dict(GOOD_TERMS, deliverables=["digital portrait, red background"])
-        self.watch("alex", "Actually, can the background be red instead of blue?", "change", red)
+        self.watch("maya", "Sure, red instead of blue!", "change_agreed", red)
         t = T.latest(self.conn, 1)
         self.assertEqual(t["version"], 2)
         self.assertFalse(t["agreed"])   # both accept again
@@ -354,15 +395,21 @@ class KeepsUpWithTheChat(Base):
         self.watch("maya", "Yes, half now ($40) and $40 at delivery. Deal?", "agreed", GOOD_TERMS)
         self.assertEqual(T.latest(self.conn, 1)["data"]["deposit"], 40)
 
+    def test_a_request_alone_changes_nothing(self):
+        self.agree()
+        self.watch("alex", "Can it be $60 instead?", "change_asked", dict(GOOD_TERMS, price=60))
+        self.watch("alex", "I was hoping for $50", "offer", dict(GOOD_TERMS, price=50))
+        self.assertEqual(T.latest(self.conn, 1)["version"], 1)
+
     def test_no_new_version_when_nothing_changed(self):
         self.agree()
-        self.watch("maya", "So $80 with 2 revisions, Friday", "change", GOOD_TERMS)
+        self.watch("maya", "So $80 with 2 revisions, Friday", "change_agreed", GOOD_TERMS)
         self.assertEqual(T.latest(self.conn, 1)["version"], 1)
 
     def test_paid_terms_are_never_rewritten(self):
         self.agree()
         self.pay_all()
-        self.watch("alex", "Can it be $60 instead?", "change", dict(GOOD_TERMS, price=60))
+        self.watch("alex", "Can it be $60 instead?", "change_asked", dict(GOOD_TERMS, price=60))
         self.assertEqual(T.latest(self.conn, 1)["version"], 1)
         self.assertIn("under way", self.notes()[-1]["text"])
 
@@ -378,16 +425,17 @@ class KeepsUpWithTheChat(Base):
         self.assertIn("Start a new deal", card)
         with mock.patch.object(llm, "ask", return_value=None):
             go = self.c.post("/r/1/newdeal", data={"as": "maya"}).json["go"]
-        new = R.get(self.conn, 2)
+        nid = int(go.split("/r/")[1].split("?")[0])
+        new = R.get(self.conn, nid)
         self.assertEqual((new["title"], new["freelancer_id"], new["client_id"]),
                          ("Portrait, red background", self.maya["id"], self.alex["id"]))
-        copied = [m["text"] for m in R.chat_text(self.conn, 2)]
+        copied = [m["text"] for m in R.chat_text(self.conn, nid)]
         self.assertEqual(copied, ["Can I have another portrait, this time with a red background?", "Sure, same price"])
         self.assertEqual(T.latest(self.conn, 1)["version"], 1)              # the first deal stays as agreed
         self.assertNotIn("Start a new deal", self.c.get("/r/1/feed?as=maya").json["card"])
-        page = self.c.get(go).get_data(as_text=True)
-        self.assertIn("Portrait, red background", page)
-        self.assertIn("Dog portrait", page)                                   # the deal switcher lists both
+        card = self.c.get(f"/r/{nid}/feed?as=maya").json["card"]
+        self.assertIn("Portrait, red background", card)
+        self.assertIn("Dog portrait", card)                                   # the deal tabs list both
 
     def test_new_work_is_announced_once(self):
         self.agree()
@@ -404,11 +452,12 @@ class KeepsUpWithTheChat(Base):
         self.watch("alex", "Another portrait please, red background", "new_work", title="Red portrait")
         self.say("maya", "Sure, same price as last time")
         with mock.patch.object(llm, "ask", return_value=None):
-            self.c.post("/r/1/newdeal", data={"as": "maya"})
-        chat = R.chat_text(self.conn, 2)
-        terms, dropped = T.check(dict(GOOD_TERMS, deadline=None), chat, T._earlier(self.conn, 2))
+            go = self.c.post("/r/1/newdeal", data={"as": "maya"}).json["go"]
+        nid = int(go.split("/r/")[1].split("?")[0])
+        chat = R.chat_text(self.conn, nid)
+        terms, dropped = T.check(dict(GOOD_TERMS, deadline=None), chat, T._earlier(self.conn, nid))
         self.assertEqual(terms["price"], 80)      # from the earlier deal, which is in the record
-        bad, _ = T.check(dict(GOOD_TERMS, price=95, deadline=None), chat, T._earlier(self.conn, 2))
+        bad, _ = T.check(dict(GOOD_TERMS, price=95, deadline=None), chat, T._earlier(self.conn, nid))
         self.assertIsNone(bad["price"])          # a number nobody said is still dropped
 
 

@@ -1,27 +1,30 @@
 {% extends "base.html" %}
-{% block title %}: {{ room.title }}{% endblock %}
+{% block title %}: {{ other.name }}{% endblock %}
 {% block topright %}
-<div class="topnav">
-{% if deals|length > 1 %}
-<nav class="deals" aria-label="Deals">
-  <select onchange="location.href=this.value" aria-label="Choose a deal">
-    {% for d in deals %}<option value="{{ url_for('room_page', room_id=d.id, **{'as': me.key}) }}" {{ 'selected' if d.id == room.id }}>{{ d.title }}</option>{% endfor %}
-  </select>
-</nav>
-{% endif %}
 <nav class="switch" aria-label="Whose side you see">
   {% for key, name, role in [(room.freelancer_key, room.freelancer, 'freelancer'), (room.client_key, room.client, 'client')] %}
   <a href="{{ url_for('room_page', room_id=room.id, **{'as': key}) }}" class="{{ 'on' if key == me.key }}" {{ 'aria-current=page' if key == me.key }}>
     {{ name }} <span>{{ role }}</span></a>
   {% endfor %}
 </nav>
-</div>
 {% endblock %}
 {% block content %}
 {% if story %}<p class="story-line"><strong>{{ story.title }}.</strong> {{ story.line }}</p>{% endif %}
 <div class="layout" data-room="{{ room.id }}" data-as="{{ me.key }}" data-me="{{ me.id }}">
+  <nav class="chats panel" aria-label="Conversations">
+    <h2>Chats</h2>
+    <ul>
+      {% for c in chats %}
+      <li><a href="{{ url_for('room_page', room_id=c.room.id, **{'as': me.key}) }}" class="{{ 'on' if c.other.id == other.id }}">
+        <span class="avatar" aria-hidden="true">{{ c.other.name[0] }}</span>
+        <span class="who"><strong>{{ c.other.name }}{% if c.deals > 1 %} <span class="deals-n">· {{ c.deals }} deals</span>{% endif %}</strong>
+          <span class="last">{{ c.last or c.room.title }}</span></span>
+      </a></li>
+      {% endfor %}
+    </ul>
+  </nav>
   <section class="chat panel">
-    <h2>{{ room.title }} <span class="muted">· {{ me.name }} and {{ other.name }}</span></h2>
+    <h2>{{ other.name }} <span class="muted">· {{ other.role }}</span></h2>
     <div id="feed" class="feed" aria-live="polite"></div>
     <div id="private" class="private" hidden></div>
     <form id="say" class="say" autocomplete="off">

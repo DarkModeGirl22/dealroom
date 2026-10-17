@@ -20,6 +20,29 @@ CHECK_PROMPT = (
 )
 
 
+PDF_PROMPT = (
+    "You are the neutral witness in a deal between a freelancer and a client. These are the terms they both "
+    "accepted:\n{terms}\n\nRequests the client made in the chat:\n{asks}\n\n"
+    "Below is the text of the delivered PDF ({pages} pages). Check each requirement against it. Name each requirement "
+    "in 2 to 5 words (for example: \"Translated to English\"). Only judge what the text actually shows; if the text "
+    "can't show it (a layout, an image), answer unclear. "
+    "Reply JSON only: {{\"seen\": one sentence describing the document, \"checks\": [{{\"requirement\": .., "
+    "\"result\": \"yes\" or \"no\" or \"unclear\", \"evidence\": a short quote or fact from the text}}]}}\n\n"
+    "PDF text:\n{text}"
+)
+
+
+def pdf_text(path: Path, limit: int = 6000) -> tuple[str, int]:
+    """The PDF's text (what the AI reads) and its number of pages."""
+    try:
+        from pypdf import PdfReader
+        r = PdfReader(str(path))
+        text = "\n".join((pg.extract_text() or "") for pg in r.pages[:20])
+        return re.sub(r"[ \t]+", " ", text).strip()[:limit], len(r.pages)
+    except Exception:   # a damaged or protected PDF: no text, the check says it couldn't read it
+        return "", 0
+
+
 def save(conn, room, person, upload) -> int | None:
     if R.side(room, person) != "freelancer":
         return None
@@ -44,13 +67,23 @@ def save(conn, room, person, upload) -> int | None:
 
 def check(conn, room, did: int):
     d = db.one(conn, "SELECT * FROM delivery WHERE id=?", did)
-    if not d or not d["stored"].lower().endswith(IMAGE) or not llm.available():
+    path = d["stored"].lower() if d else ""
+    is_pdf = path.endswith(".pdf")
+    if not d or not (path.endswith(IMAGE) or is_pdf) or not llm.available():
         return None
     t = T.latest(conn, room["id"])["data"]
     terms = json.dumps({k: t.get(k) for k in ("item", "deliverables", "revisions")})
-    client_id = room["client_id"]
-    asks = [m["text"] for m in R.chat_text(conn, room["id"]) if m["role"] == "client"][-6:]
-    out = llm.look(CHECK_PROMPT.format(terms=terms, asks="\n".join(f"- {a}" for a in asks) or "-"), Path(d["stored"]))
+    asks = "\n".join(f"- {a}" for a in [m["text"] for m in R.chat_text(conn, room["id"]) if m["role"] == "client"][-6:]) or "-"
+    if is_pdf:
+        text, pages = pdf_text(Path(d["stored"]))
+        if not text:
+            R.note(conn, room["id"], "warn", "The PDF has no readable text (it may be scanned or protected), so the AI "
+                   "couldn't check it. The delivery and the download are still recorded.")
+            return None
+        out = llm.ask("Reply with JSON only.", PDF_PROMPT.format(terms=terms, asks=asks, pages=pages, text=text),
+                      task="smart", max_tokens=700)
+    else:
+        out = llm.look(CHECK_PROMPT.format(terms=terms, asks=asks), Path(d["stored"]))
     if not out or not isinstance(out.get("checks"), list):
         return None
     checks = [c for c in out["checks"] if isinstance(c, dict) and c.get("requirement") and c.get("result") in ("yes", "no", "unclear")][:6]
@@ -59,7 +92,7 @@ def check(conn, room, did: int):
     line = "; ".join(f"{c['requirement']} {mark[c['result']]}" for c in checks)
     bad = [c for c in checks if c["result"] == "no"]
     level = "good" if not bad and checks else "warn"
-    R.note(conn, room["id"], level, f"{llm.LABELS['vision']} checked the file against the terms: {line}. "
+    R.note(conn, room["id"], level, f"{llm.LABELS['smart' if is_pdf else 'vision']} checked the file against the terms: {line}. "
                                     f"It sees: {out.get('seen', '')}".strip(), {"delivery_id": did})
     return checks
 

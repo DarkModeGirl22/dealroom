@@ -43,7 +43,7 @@ MESSAGES = [
     ("I never received the file", {"not_received"}), ("The background isn't blue like I asked", {"not_as_described"}),
     ("You still haven't paid me the final $40", {"not_paid"}), ("It's 3 days late, where is it?", {"late"}),
     ("I want my money back", {"wants_refund"}), ("Love it, thank you so much!", set()),
-    ("Can you make the eyes a bit bigger?", set()), ("Sent the deposit just now", set()),
+    ("Can you make the eyes a bit bigger?", set()), ("Sent the deposit just now", {"says_paid"}), ("I'll pay the rest tonight", set()),
     ("Got the file, downloading it now", set()), ("What time works for a call?", set()),
 ]
 
@@ -54,8 +54,14 @@ BEFORE = [("Alex", "client", "Hi Maya! Could you draw my dog Biscuit? Blue backg
 WATCHES = [
     ("No terms yet.", BEFORE, ("Maya", "freelancer", "Yes, $40 now and $40 at delivery."), "agreed"),
     ("No terms yet.", BEFORE[:1], ("Maya", "freelancer", "What size do you need?"), "none"),
-    (DEAL, BEFORE, ("Alex", "client", "Actually, can the background be red instead of blue?"), "change"),
-    (DEAL, BEFORE, ("Alex", "client", "Could you have it ready Thursday instead of Friday?"), "change"),
+    ("No terms yet.", [("Lina", "client", "Could you translate my CV to English? 2 pages"),
+                       ("Maya", "freelancer", "Yes, $40, 1 revision, 3 days.")], ("Lina", "client", "great, thanks!"), "agreed"),
+    ("No terms yet.", BEFORE[:1], ("Maya", "freelancer", "It's $500, ready Friday."), "none"),
+    (DEAL, BEFORE, ("Alex", "client", "Actually, can the background be red instead of blue?"), "none"),
+    (DEAL, BEFORE + [("Alex", "client", "Actually, can the background be red instead of blue?")],
+     ("Maya", "freelancer", "Sure, red it is!"), "change"),
+    (DEAL, BEFORE, ("Alex", "client", "I was hoping for something closer to $60, can we adjust?"), "none"),
+    (DEAL, BEFORE, ("Maya", "freelancer", "I can also have it ready Thursday instead of Friday, no extra cost."), "change"),
     (DEAL, BEFORE, ("Alex", "client", "can i have another portait"), "new_work"),
     (DEAL, BEFORE, ("Alex", "client", "Could you also draw my cat Luna, as a separate piece?"), "new_work"),
     (DEAL, BEFORE, ("Maya", "freelancer", "2 days. can u pay half deposit for the new project with red background"), "new_work"),
@@ -114,6 +120,16 @@ def eval_files(log):
         res = ((out.get("checks") or [{}])[0]).get("result")
         right += res == expect
         log.append(f"file {name}: {res} (expected {expect})")
+    from dealroom import delivery as D
+    terms = '{"item": "CV translation", "deliverables": ["CV translated from French to English", "2 pages"]}'
+    for name, expect in {"cv_lina_english.pdf": "yes", "cv_lina_french.pdf": "no"}.items():
+        text, pages = D.pdf_text(ROOT / "samples" / name)
+        out = llm.ask("Reply with JSON only.", D.PDF_PROMPT.format(terms=terms, asks="- Please translate my CV to English",
+                      pages=pages, text=text), task="smart", max_tokens=700) or {}
+        res = next((c.get("result") for c in out.get("checks") or [] if "english" in str(c.get("requirement")).lower()), None)
+        right += res == expect
+        want[name] = expect
+        log.append(f"file {name}: {res} (expected {expect})")
     c1 = meter()
     return right, len(want), c1[0] - c0[0], c1[1] - c0[1], time.time() - t0
 
@@ -140,7 +156,7 @@ def eval_watch(log):
         lines = "\n".join(f"{n} ({r}): {t}" for n, r, t in before)
         out = llm.ask(WA.WATCH, f"Current deal: {deal}\n\nChat before:\n{lines}\n\nLAST message, {name} ({role}): {text}",
                       task="smart", max_tokens=120) or {}
-        got = out.get("kind")
+        got = {"change_agreed": "change", "offer": "none", "change_asked": "none"}.get(out.get("kind"), out.get("kind"))
         right += got == want
         if got != want:
             log.append(f"watch \"{text}\": got {got}, expected {want}")
@@ -197,9 +213,9 @@ def main():
     print("| What the AI does | Model | Result |")
     print("|---|---|---|")
     print(f"| Turn 6 chats into terms (24 values; one chat changes the price, one never agrees on terms) | Nemotron 3 Super | {fmt(tt)} |")
-    print(f"| Check a delivered image against the terms (blue background vs red) | Nemotron 3.5 Super VL | {fr} of {fn_} right |")
-    print(f"| Recognise what a message claims (10 messages, 5 claims) | Nemotron 3 Nano | {tp} of {tp + fn} claims found, {fp} false alarms |")
-    print(f"| Notice what a chat message does to the deal (agreed, a change, new work, nothing; 11 messages) | Nemotron 3 Super | {wr} of {wn} right |")
+    print(f"| Check a delivery against the terms (blue vs red portrait; English vs untranslated CV PDF) | Nemotron 3.5 Super VL, Nemotron 3 Super | {fr} of {fn_} right |")
+    print(f"| Recognise what a message claims (11 messages, 6 claims) | Nemotron 3 Super | {tp} of {tp + fn} claims found, {fp} false alarms |")
+    print(f"| Notice what a chat message does to the deal (agreed, a change, new work, nothing; 15 messages) | Nemotron 3 Super | {wr} of {wn} right |")
     print(f"| Dispute report, 3 runs: sentences kept vs removed by the grounding filter | Nemotron 3 Super | {kept} kept, {removed} removed; "
           f"sided with the freelancer in {sup.count('freelancer')} of {len(sup)} (the record supports her) |")
     print("\nDetails:\n")

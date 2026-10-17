@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="hero">
-  <p class="eyebrow">For digital freelancers paid through PayPal</p>
+  <p class="eyebrow">For everyone who buys or sells digital work with PayPal</p>
   <h1>If you did nothing wrong, the record proves it.</h1>
-  <p class="lead">One room per job: the chat, the terms, the PayPal payment and the delivery, all recorded. An AI witness keeps the facts, warns about scams, and if a dispute happens, PayPal gets the full truth.</p>
+  <p class="lead">Talk, agree, pay with PayPal and deliver in one conversation. Every message, payment and file is recorded with its time. An AI witness turns the chat into clear terms, checks the delivery, warns both sides about scams, and if something goes wrong, PayPal gets the full truth, whoever is right.</p>
+  <div class="sides">
+    <p><strong>You sell your work:</strong> "I never received it" can't be used against you. Your delivery and the client's download are on the record.</p>
+    <p><strong>You pay for work:</strong> you get what was agreed. The terms are written down, the file is checked against them, and your money only goes through PayPal.</p>
+  </div>
   <div class="stories">
     {% for key, s in stories.items() %}
     <form method="post" action="{{ url_for('start', story=key) }}" class="story">
@@ -13,7 +17,7 @@
     </form>
     {% endfor %}
   </div>
-  {% if current %}<p class="small"><a href="{{ url_for('room_page', room_id=current.id) }}">Back to your room</a></p>{% endif %}
+  {% if current %}<p class="small"><a href="{{ url_for('room_page', room_id=current.id) }}">Back to your chats</a></p>{% endif %}
   <p class="small muted">Each visitor gets a private copy, deleted after 24 hours. People and documents are fictional; payments use PayPal's sandbox (no real money).</p>
 </section>
 {% endblock %}
