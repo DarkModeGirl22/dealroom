@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}: {{ room.title }}{% endblock %}
+{% block topright %}
+<nav class="switch" aria-label="Whose side you see">
+  {% for key, name, role in [(room.freelancer_key, room.freelancer, 'freelancer'), (room.client_key, room.client, 'client')] %}
+  <a href="{{ url_for('room_page', room_id=room.id, **{'as': key}) }}" class="{{ 'on' if key == me.key }}" {{ 'aria-current=page' if key == me.key }}>
+    {{ name }} <span>{{ role }}</span></a>
+  {% endfor %}
+</nav>
+{% endblock %}
+{% block content %}
+{% if story %}<p class="story-line"><strong>{{ story.title }}.</strong> {{ story.line }}</p>{% endif %}
+<div class="layout" data-room="{{ room.id }}" data-as="{{ me.key }}" data-me="{{ me.id }}">
+  <section class="chat panel">
+    <h2>{{ room.title }} <span class="muted">· {{ me.name }} and {{ other.name }}</span></h2>
+    <div id="feed" class="feed" aria-live="polite"></div>
+    <div id="private" class="private" hidden></div>
+    <form id="say" class="say" autocomplete="off">
+      <input id="text" name="text" placeholder="Message {{ other.name }}" maxlength="2000" aria-label="Message">
+      <button class="btn">Send</button>
+    </form>
+  </section>
+  <aside class="card panel" id="card" aria-label="Deal card"></aside>
+</div>
+{% if side == 'client' and paypal_client_id %}<script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=USD&intent=capture&components=buttons&disable-funding=paylater,venmo,card"></script>{% endif %}
+<script src="{{ url_for('static', filename='room.js') }}"></script>
+{% endblock %}

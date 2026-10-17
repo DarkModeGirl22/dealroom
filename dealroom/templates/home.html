@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">For digital freelancers paid through PayPal</p>
+  <h1>If you did nothing wrong, you can't be made to look bad.</h1>
+  <p class="lead">One room per job: the chat, the terms, the PayPal payment and the delivery, all recorded. An AI witness keeps the facts, warns about scams, and if a dispute happens, PayPal gets the full truth.</p>
+  <div class="stories">
+    {% for key, s in stories.items() %}
+    <form method="post" action="{{ url_for('start', story=key) }}" class="story">
+      <h2>{{ s.title }}</h2>
+      <p>{{ s.line }}</p>
+      <button class="btn {{ '' if loop.first else 'secondary' }}">{{ 'Start' if not current else 'Start again' }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  {% if current %}<p class="small"><a href="{{ url_for('room_page', room_id=current.id) }}">Back to your room</a></p>{% endif %}
+  <p class="small muted">Each visitor gets a private copy, deleted after 24 hours. People and documents are fictional; payments use PayPal's sandbox (no real money).</p>
+</section>
+{% endblock %}

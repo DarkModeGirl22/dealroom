@@ -1,0 +1,105 @@
+{% set t = state.terms %}{% set d = t.data if t else {} %}{% set dv = state.delivery %}{% set x = state.dispute %}
+{% set agreed = t and t.agreed %}{% set paid_all = state.parts and not (state.parts|rejectattr('paid')|list) %}
+<h2 class="card-title">Deal card</h2>
+
+<section class="step {{ 'done' if agreed else 'now' }}">
+  <h3><span class="num">1</span> Terms {% if agreed %}<span class="badge good">agreed</span>{% endif %}</h3>
+  {% if not t %}
+    <p class="small muted">Talk about the job in the chat. Then DealRoom turns the conversation into terms you both accept.</p>
+    <form data-ajax method="post" action="/r/{{ room.id }}/terms/draft"><button class="btn" {{ 'disabled' if not state.ai }}>Draft terms from our chat</button></form>
+  {% else %}
+    <dl>
+      <dt>Work</dt><dd>{{ d.item }}</dd>
+      <dt>Price</dt><dd>{{ '$%.2f'|format(d.price) if d.price is not none else 'to agree' }}</dd>
+      {% if d.deposit %}<dt>Deposit</dt><dd>${{ '%.2f'|format(d.deposit) }} before work</dd>{% endif %}
+      <dt>Revisions</dt><dd>{{ d.revisions if d.revisions is not none else 'not said' }}</dd>
+      <dt>Delivery</dt><dd>{{ d.deadline or 'not said' }}</dd>
+    </dl>
+    <p class="small muted">{{ 'Drafted by NVIDIA Nemotron from your chat' if t.source == 'ai' else t.source|capitalize }} · version {{ t.version }}</p>
+    {% if not agreed %}
+      <p class="small">{{ room.freelancer }} {{ '✓' if t.accepted_freelancer else '…' }} · {{ room.client }} {{ '✓' if t.accepted_client else '…' }}</p>
+      {% set mine = t.accepted_freelancer if side == 'freelancer' else t.accepted_client %}
+      <div class="row">
+        {% if not mine and d.price is not none %}<form data-ajax method="post" action="/r/{{ room.id }}/terms/accept"><button class="btn">Accept</button></form>{% endif %}
+        <form data-ajax method="post" action="/r/{{ room.id }}/terms/draft"><button class="btn secondary" {{ 'disabled' if not state.ai }}>Update from chat</button></form>
+      </div>
+      <details class="small"><summary>Change a detail</summary>
+        <form data-ajax method="post" action="/r/{{ room.id }}/terms/edit" class="edit">
+          <label>Price ($) <input name="price" type="number" step="0.01" min="0" value="{{ d.price if d.price is not none else '' }}"></label>
+          <label>Deposit ($) <input name="deposit" type="number" step="0.01" min="0" value="{{ d.deposit or '' }}"></label>
+          <label>Revisions <input name="revisions" type="number" min="0" value="{{ d.revisions if d.revisions is not none else '' }}"></label>
+          <label>Delivery <input name="deadline" value="{{ d.deadline or '' }}"></label>
+          <button class="btn secondary">Save (both accept again)</button>
+        </form>
+      </details>
+    {% endif %}
+  {% endif %}
+</section>
+
+{% if agreed %}
+<section class="step {{ 'done' if paid_all else 'now' }}">
+  <h3><span class="num">2</span> Invoice and payment {% if paid_all %}<span class="badge good">paid</span>{% endif %}</h3>
+  {% if not t.invoice_number %}
+    {% if side == 'freelancer' %}
+      <form data-ajax method="post" action="/r/{{ room.id }}/invoice"><button class="btn">Make the invoice</button></form>
+      <p class="small muted">A PayPal invoice and a PDF, written from the accepted terms.</p>
+    {% else %}<p class="small muted">Waiting for {{ room.freelancer }} to make the invoice.</p>{% endif %}
+  {% else %}
+    <p class="small">Invoice <a href="/r/{{ room.id }}/invoice.pdf?as={{ me.key }}" target="_blank">{{ t.invoice_number }}</a>{% if t.invoice_id %} · on PayPal{% endif %}</p>
+    <ul class="parts">{% for p in state.parts %}
+      <li><span>{{ p.part|capitalize }}</span> <strong>${{ '%.2f'|format(p.amount) }}</strong>
+        {% if p.paid %}<span class="badge good">paid</span>{% else %}<span class="badge warn">due</span>{% endif %}</li>{% endfor %}</ul>
+    {% set due = state.parts|rejectattr('paid')|list %}
+    {% if due %}
+      {% if side == 'client' and state.paypal %}
+        <div id="pp-buttons" data-part="{{ due[0].part }}" data-room="{{ room.id }}"></div>
+        <p class="small muted">Locked to the terms: ${{ '%.2f'|format(due[0].amount) }}.</p>
+      {% elif side == 'client' %}<p class="small muted">PayPal isn't set up on this server.</p>
+      {% else %}<p class="small muted">{{ room.client }} pays here with PayPal. The amount is locked to the terms.</p>{% endif %}
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="step {{ 'done' if dv and dv.downloads else ('now' if t.invoice_number else '') }}">
+  <h3><span class="num">3</span> Delivery {% if dv and dv.downloads %}<span class="badge good">received</span>{% endif %}</h3>
+  {% if dv %}
+    <p class="small"><a href="/r/{{ room.id }}/file/{{ dv.id }}?as={{ me.key }}" target="_blank">{{ dv.filename }}</a></p>
+    {% if dv.check.checks %}<ul class="checks">{% for c in dv.check.checks %}
+      <li class="{{ c.result }}">{{ {'yes': '✓', 'no': '✗', 'unclear': '?'}[c.result] }} {{ c.requirement }}</li>{% endfor %}</ul>{% endif %}
+    <p class="small muted">{% if dv.downloads %}Downloaded by {{ dv.downloads[0].name }}, recorded.{% else %}Not downloaded yet.{% endif %}</p>
+  {% endif %}
+  {% if side == 'freelancer' and not x %}
+    <form data-ajax method="post" action="/r/{{ room.id }}/deliver" enctype="multipart/form-data" class="upload">
+      <label class="file"><input type="file" name="file" required accept="image/*,.pdf,.zip"><span>{{ 'Deliver a new version' if dv else 'Deliver the file' }}</span></label>
+    </form>
+    <p class="small muted">The AI checks it against the terms.</p>
+  {% elif not dv %}<p class="small muted">The file appears here when {{ room.freelancer }} delivers it.</p>{% endif %}
+</section>
+
+{% if x %}
+<section class="step dispute">
+  <h3><span class="num">!</span> Dispute <span class="badge bad">{{ x.status }}</span></h3>
+  <p class="small">{{ x.reason_label }}: "{{ x.claim }}"</p>
+  {% if side == 'freelancer' %}
+    {% if not x.report %}
+      <form data-ajax method="post" action="/r/{{ room.id }}/dispute/prepare"><button class="btn">Prepare my evidence</button></form>
+      <p class="small muted">Built from the room's record. Every sentence must point to it.</p>
+    {% else %}
+      {% if x.report.assessment %}<p class="small"><strong>What the record shows:</strong> {{ x.report.assessment }}</p>{% endif %}
+      <p class="small"><a href="/r/{{ room.id }}/evidence.pdf?as={{ me.key }}" target="_blank">Evidence report (PDF)</a></p>
+      {% if not x.sent_ts %}<form data-ajax method="post" action="/r/{{ room.id }}/dispute/send"><button class="btn">Send to PayPal</button></form>
+      {% else %}<p class="small"><span class="badge good">sent to PayPal</span></p>{% endif %}
+    {% endif %}
+  {% else %}<p class="small muted">PayPal will decide, with the room's full record.</p>{% endif %}
+</section>
+{% elif side == 'client' and state.parts|selectattr('paid')|list %}
+<details class="small problem"><summary>Report a problem to PayPal</summary>
+  <form data-ajax method="post" action="/r/{{ room.id }}/dispute/open" class="edit">
+    <input type="hidden" name="confirm" value="0">
+    <label>Reason <select name="reason"><option value="not_received">I didn't receive it</option>
+      <option value="not_as_described">It's not what was agreed</option></select></label>
+    <label>What happened <input name="claim" placeholder="Describe the problem"></label>
+    <button class="btn secondary">Open a dispute</button>
+  </form></details>
+{% endif %}
+{% endif %}
