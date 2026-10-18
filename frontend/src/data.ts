@@ -31,7 +31,7 @@ export function buildData(d: DashData): AgDataSourcesDefinition {
   return {
     description:
       `DealRoom record for ${d.me.name}, a ${d.me.role}. Each deal is one job between ${d.me.name} and one ${who.toLowerCase()}: ` +
-      'terms both accepted, PayPal payments (deposit and final, or full), the delivered file checked by NVIDIA Nemotron against ' +
+      'terms both accepted, PayPal payments (deposit and final, or full), the delivered file checked by DealRoom AI against ' +
       'the terms, the download, and any dispute. Amounts are USD. "PayPal sample" payments are recorded demo history; ' +
       '"PayPal sandbox" payments were made live in this demo.',
     sources: [

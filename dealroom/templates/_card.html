@@ -27,7 +27,7 @@
       <dt>Revisions</dt><dd>{{ d.revisions if d.revisions is not none else 'not said' }}</dd>
       <dt>Delivery</dt><dd>{{ d.deadline or 'not said' }}</dd>
     </dl>
-    <p class="small muted">{{ 'Drafted by NVIDIA Nemotron from your chat' if t.source == 'ai' else t.source|capitalize }} · version {{ t.version }}</p>
+    <p class="small muted">{{ 'Drafted by DealRoom AI from your chat' if t.source == 'ai' else t.source|capitalize }} · version {{ t.version }}</p>
     {% if not agreed %}
       <p class="small">{{ room.freelancer }} {{ '✓' if t.accepted_freelancer else '…' }} · {{ room.client }} {{ '✓' if t.accepted_client else '…' }}</p>
       {% set mine = t.accepted_freelancer if side == 'freelancer' else t.accepted_client %}

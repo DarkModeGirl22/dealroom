@@ -99,12 +99,18 @@ def create_app() -> Flask:
         out["ai"] = llm.available()
         return jsonify(out)
 
-    @app.post("/api/ai/responses")
-    def ai_responses():
-        """AG Studio's AI assistant, answered by NVIDIA Nemotron 3 Super on Nebius."""
+    @app.post("/api/ai/<who>/responses")
+    def ai_responses(who):
+        """The dashboard's AI assistant (AG Studio's agents, answered by Nemotron 3 Super on Nebius). The lead agent
+        gets the facts code computed from this person's record, so its answers use real numbers."""
         if g.conn is None:
             abort(403)
+        p = R.person(g.conn, who)
+        if not p or p["key"] not in ("maya", "alex"):
+            abort(404)
         body = request.get_json(silent=True) or {}
+        if "## DealRoom" in str(body.get("instructions") or ""):
+            body["instructions"] = str(body["instructions"]) + "\n\n## The record (computed by code, exact)\n" + DASH.facts(g.conn, p)
         stream = bool(body.get("stream"))
         return Response(stream_with_context(llm.responses_proxy(body)),
                         mimetype="text/event-stream" if stream else "application/json",

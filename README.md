@@ -27,7 +27,7 @@ Open the site, then pick an account. Both live in the same private copy (yours a
 - **Alex** loved his dog portrait and owes the last $40. The delivered file, Nemotron's check of it and Alex's download are on the record.
 - **Jordan** downloaded his podcast cover, then opened a PayPal dispute saying he never got it. Click **Prepare my evidence**: Nemotron writes the report from the record, every sentence pointing to a recorded event, and **Send to PayPal**.
 - **Sam** (played by NVIDIA Nemotron, labelled "AI") wants a bakery logo. Negotiate in your own words. He'll try to pay through Friends & Family once; watch the warning. When you agree, the terms appear by themselves; make the PayPal invoice.
-- **My business** is the AG Studio dashboard: what you earned, what you're owed, what needs you now, and how complete the proof is on every deal. Click **Ask Nemotron** and ask "Who owes me money?" or "Add a chart of what I earned by client".
+- **My business** is the AG Studio dashboard: what you earned, what you're owed, what needs you now, and how complete the proof is on every deal. Click **AI assistant** and ask "Who owes me money?" or "Add a chart of what I earned by client".
 
 **Log in as the client (Alex).** His week:
 

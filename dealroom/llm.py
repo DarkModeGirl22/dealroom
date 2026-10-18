@@ -26,7 +26,8 @@ MODELS = {
     "smart": "nvidia/nemotron-3-super-120b-a12b",         # terms, statements, the evidence report
     "vision": "nvidia/Nemotron-3.5-Super-VL",             # does the delivered file match the terms?
 }
-LABELS = {"fast": "NVIDIA Nemotron 3 Nano", "smart": "NVIDIA Nemotron 3 Super", "vision": "NVIDIA Nemotron 3.5 Super VL"}
+# What people see: the product, not the model (the models are named in the README)
+LABELS = {"fast": "DealRoom AI", "smart": "DealRoom AI", "vision": "DealRoom AI"}
 PRICES = {MODELS["fast"]: (0.06, 0.24), MODELS["smart"]: (0.30, 0.90), MODELS["vision"]: (0.30, 0.90)}
 DAILY_USD = float(os.environ.get("DEALROOM_AI_DAILY_USD", "1.00"))
 TOTAL_USD = float(os.environ.get("DEALROOM_AI_TOTAL_USD", "10"))
@@ -162,6 +163,28 @@ class _SameCallIds:
         return self._line(rest) if rest else b""
 
 
+def _plain_history(items):
+    """AG Studio sends earlier answers back as output items without an id, which Nebius rejects (422 on the
+    second message). Earlier assistant messages become plain {role, content}; id-less reasoning is dropped."""
+    if not isinstance(items, list):
+        return items
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            out.append(it)
+        elif it.get("type") == "message" and it.get("role") == "assistant" and not it.get("id"):
+            c = it.get("content")
+            text = c if isinstance(c, str) else "".join(x.get("text", "") for x in c or [] if isinstance(x, dict))
+            out.append({"role": "assistant", "content": text})
+        elif it.get("type") == "reasoning" and not it.get("id"):
+            continue
+        elif it.get("type") == "function_call" and not it.get("id"):
+            out.append({**it, "id": "fc_" + str(it.get("call_id", ""))[-40:]})
+        else:
+            out.append(it)
+    return out
+
+
 def responses_proxy(body: dict):
     """The dashboard's AI assistant (AG Studio) speaks OpenAI's Responses API; Nebius serves it for Nemotron.
     The key stays on the server, the model is fixed, output is capped, and the spending limits apply.
@@ -170,6 +193,7 @@ def responses_proxy(body: dict):
         yield b'data: {"type":"error","message":"The AI assistant is resting: today\'s AI budget is used up."}\n\n'
         return
     body = dict(body)
+    body["input"] = _plain_history(body.get("input"))
     body["model"] = MODELS["smart"]
     body["max_output_tokens"] = min(int(body.get("max_output_tokens") or 4000), 4000)
     body.setdefault("reasoning", {"effort": "low"})

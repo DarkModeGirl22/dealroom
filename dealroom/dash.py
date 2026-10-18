@@ -106,3 +106,48 @@ def build(conn, me) -> dict:
     deals.sort(key=lambda d: order.index(d["status"]) if d["status"] in order else 99)
     return {"me": {"key": me["key"], "name": me["name"], "role": me["role"]},
             "deals": deals, "payments": payments, "alerts": alerts}
+
+
+def facts(conn, me) -> str:
+    """Exact facts computed by code from the record, given to the AI assistant with every question,
+    so it answers with real numbers (and forecasts from them) instead of guessing."""
+    data = build(conn, me)
+    deals, pays, alerts = data["deals"], data["payments"], data["alerts"]
+    seller = me["role"] == "freelancer"
+    who = "client" if seller else "freelancer"
+    agreed = [d for d in deals if d["hasTerms"]]
+    lines = [f"Today is {db.now()[:10]}. {me['name']} is a {me['role']}. Amounts are US dollars. "
+             f"Names marked (AI) are people played by AI for the demo.",
+             f"Totals: {len(deals)} deals ({len(agreed)} with agreed terms); "
+             f"{'earned' if seller else 'paid'} through PayPal ${sum(p['amount'] for p in pays):,.2f} in {len(pays)} payments; "
+             f"still {'owed to me' if seller else 'owed by me'} ${sum(d['owed'] for d in deals):,.2f}; "
+             f"open issues {sum(d['openIssue'] for d in deals)}; scam warnings {sum(a['isScam'] for a in alerts)}."]
+    people = {}
+    for d in deals:
+        people.setdefault(d["counterpart"], []).append(d)
+    returning = [n for n, ds in people.items() if len([d for d in ds if d["hasTerms"]]) >= 2]
+    with_deal = [n for n, ds in people.items() if any(d["hasTerms"] for d in ds)]
+    if with_deal:
+        lines.append(f"Return rate: {len(returning)} of {len(with_deal)} {who}s with an agreed deal came back for another "
+                     f"({100 * len(returning) // len(with_deal)}%): {', '.join(returning) or 'none'}.")
+    lines.append(f"\nPer {who} (deals, agreed, completed, paid, owed, disputes, files that didn't match, files downloaded, scam warnings, first and last activity):")
+    for n, ds in sorted(people.items(), key=lambda kv: -sum(d["paid"] for d in kv[1])):
+        sc = sum(a["isScam"] for a in alerts if a["counterpart"] == n)
+        lines.append(f"- {n}: {len(ds)} deals, {sum(d['hasTerms'] for d in ds)} agreed, "
+                     f"{sum(d['status'] == 'Completed' for d in ds)} completed, paid ${sum(d['paid'] for d in ds):,.2f}, "
+                     f"owed ${sum(d['owed'] for d in ds):,.2f}, {sum(d['status'] == 'Dispute open' for d in ds)} disputes, "
+                     f"{sum(d['fileCheck'] == 'Doesn' + chr(39) + 't match' for d in ds)} mismatched files, "
+                     f"{sum(d['hasDownload'] for d in ds)} downloads, {sc} scam warnings, "
+                     f"{min(d['started'] for d in ds)} to {max(d['lastActivity'] for d in ds)}")
+    months = {}
+    for p in pays:
+        months[p["date"][:7]] = months.get(p["date"][:7], 0) + p["amount"]
+    lines.append("\nPayments by month: " + "; ".join(f"{m} ${v:,.2f}" for m, v in sorted(months.items())))
+    lines.append("\nEvery deal (title | with | status | price | paid | owed | file check | next action | started | last activity):")
+    for d in deals:
+        lines.append(f"- {d['deal']} | {d['counterpart']} | {d['status']} | "
+                     f"{'$%.2f' % d['price'] if d['price'] else 'no price yet'} | ${d['paid']:.2f} | ${d['owed']:.2f} | "
+                     f"{d['fileCheck']} | {d['nextAction']} | {d['started']} | {d['lastActivity']}")
+    lines.append("\nWarnings and checks on record:")
+    lines += [f"- {a['date']} {a['counterpart']}: {a['kind']}: {a['text'][:140]}" for a in alerts if a["kind"] != "Payment"][:25]
+    return "\n".join(lines)

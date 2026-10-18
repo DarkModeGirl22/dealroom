@@ -85,7 +85,7 @@ class Builder:
         marks = "; ".join(f"{c['requirement']} {'✓' if c['result'] == 'yes' else '✗' if c['result'] == 'no' else '?'}"
                           for c in check["checks"])
         bad = any(c["result"] == "no" for c in check["checks"])
-        model = "NVIDIA Nemotron 3 Super" if filename.endswith(".pdf") else "NVIDIA Nemotron 3.5 Super VL"
+        model = "DealRoom AI"
         self.note(rid, h - 0.01, "warn" if bad else "good", f"{model} checked the file against the terms: {marks}. "
                   f"It sees: {check['seen']}")
         if downloader:

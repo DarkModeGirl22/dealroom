@@ -76,10 +76,16 @@ function makeTheme(statuses: string[]) {
 // DealRoom's rules added to the lead agent: answer in words first, never break the widgets people rely on.
 function buildAi(me: DashData['me']): AgAiHarnessSetup {
   const seller = me.role === 'freelancer';
-  const adapter = openaiAdapter({ endpoint: '/api/ai', model: 'nvidia/nemotron-3-super-120b-a12b' });
+  const adapter = openaiAdapter({ endpoint: `/api/ai/${me.key}`, model: 'nvidia/nemotron-3-super-120b-a12b' });
   const rules =
     `\n\n## DealRoom\nThe user is ${me.name}, a ${me.role} on DealRoom. Amounts are US dollars.\n` +
-    '- When the user asks a question, answer it in plain words first, with the numbers the data agent found.\n' +
+    '- You are DealRoom\'s AI assistant. For questions (totals, who owes what, return rate, best clients, risks, trends, ' +
+    'forecasts), answer directly in plain words from "The record" below: it is exact, computed by code. Do the arithmetic ' +
+    'yourself and show it briefly. A forecast starts from money already owed and deals in progress (who owes what, and ' +
+    'how reliably that person paid before), then adds the trend from past months; say the method and the assumption. ' +
+    'Judge trust from the record: disputes, files downloaded, scam warnings, payments made. If the record cannot answer, ' +
+    'say what is missing. Keep answers short, and ask a ' +
+    'follow-up question only when the request is ambiguous.\n' +
     '- Change the dashboard only when the user asks to show, add or chart something. Then ADD a new widget: never ' +
     'modify or remove the existing widgets (the KPI tiles, "Needs you now", "Proof on record", the charts and the grid).\n' +
     '- Never apply a filter that leaves a widget empty. Keep titles short and plain.\n';
@@ -130,13 +136,13 @@ function Dashboard() {
           <h1>{seller ? 'My business' : 'My purchases'}</h1>
           <p>
             {seller ? 'Every deal, payment and alert from your conversations, straight from the record.' : 'Every purchase, payment and alert from your conversations, straight from the record.'}{' '}
-            {data.ai ? 'Ask the assistant (NVIDIA Nemotron) to explain or add a view.' : ''}
+            {data.ai ? 'Ask the AI assistant anything about it, or to add a view.' : ''}
           </p>
         </div>
         <div className="dash-actions">
           {data.ai && (
             <button type="button" className={`ask ${asking ? 'on' : ''}`} onClick={() => setAsking(!asking)} aria-pressed={asking}>
-              {asking ? 'Close the assistant' : 'Ask Nemotron'}
+              {asking ? 'Close the assistant' : 'AI assistant'}
             </button>
           )}
           <span className="dash-note">Built with AG Studio · history marked "PayPal sample" is demo data</span>

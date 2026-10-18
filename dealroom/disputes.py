@@ -148,7 +148,7 @@ def report_pdf(conn, room) -> bytes | None:
     for title, k in (("2. The freelancer's side", "freelancer"), ("3. The client's side", "client"),
                      ("4. Neutral assessment", "assessment")):
         s += [Paragraph(title, S["Heading2"]), Paragraph(rep.get(k) or "No statement could be grounded in the record.", S["Normal"])]
-    s += [Spacer(1, 8), Paragraph("Statements 2 to 4 were written by NVIDIA Nemotron from the timeline above. Every "
+    s += [Spacer(1, 8), Paragraph("Statements 2 to 4 were written by DealRoom AI from the timeline above. Every "
                                   "sentence cites the events it relies on; sentences that didn't were removed. DealRoom "
                                   "never decides disputes: PayPal does.", S["Italic"])]
     return docs._doc(s)
