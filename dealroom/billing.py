@@ -62,7 +62,11 @@ def create_order(conn, room, part: str, custom_id: str | None = None) -> str:
     t = T.latest(conn, room["id"])
     amount = plan[part]["amount"]
     label = {"deposit": "deposit", "final": "final payment", "full": "payment"}[part]
-    order = paypal.create_order(amount, f"{t['data']['item']} ({label})", f"room-{room['id']}-{part}", t["invoice_number"],
+    # PayPal refuses to capture a second order with an invoice id it has seen, and every private copy (and every
+    # "Start over") numbers its invoices the same way: so each order gets its own id, built from the invoice number
+    import uuid
+    order = paypal.create_order(amount, f"{t['data']['item']} ({label}, invoice {t['invoice_number']})",
+                                f"room-{room['id']}-{part}", f"{t['invoice_number']}-{part}-{uuid.uuid4().hex[:10]}",
                                 custom_id)
     db.insert(conn, "payment", room_id=room["id"], part=part, amount=amount, order_id=order["id"], status="CREATED",
               ts=db.now())

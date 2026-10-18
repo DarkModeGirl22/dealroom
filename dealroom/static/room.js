@@ -105,6 +105,13 @@
     if (e.target.matches('input[type=file]') && e.target.files.length) e.target.form.requestSubmit();
   });
 
+  // a failed payment is said out loud, never swallowed
+  function payError(msg) {
+    const t = document.getElementById('toast');
+    if (!t) { alert(msg); return; }
+    t.className = 'toast bad'; t.textContent = msg; t.hidden = false;
+  }
+
   // PayPal button: the order is created by the server from the accepted terms, so the amount is locked
   function buttons() {
     const box = document.getElementById('pp-buttons');
@@ -120,10 +127,13 @@
         return d.id;
       },
       onApprove: async data => {
-        await fetch(`/r/${roomId}/pay/capture?as=${as}`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+        const r = await fetch(`/r/${roomId}/pay/capture?as=${as}`, {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({order_id: data.orderID})});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) payError('PayPal did not complete the payment: ' + (d.error || r.status));
         poll();
-      }
+      },
+      onError: err => payError('PayPal reported a problem: ' + (err && err.message || err))
     }).render(box);
   }
 
