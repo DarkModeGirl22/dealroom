@@ -147,6 +147,15 @@ def problem(conn, room, me, text: str, scam_turn: bool = False) -> str | None:
         return "no file has been delivered: you can't say you sent it."
     if me["role"] == "freelancer" and CLAIM_RECEIVED.search(text) and not any(p["paid"] for p in parts):
         return "PayPal has confirmed no payment: you can't say you received one."
+    if me["role"] == "freelancer" and parts and all(p["paid"] for p in parts) and re.search(
+            r"once (?:the |your )?payment|after (?:you )?pay|when (?:the |your )?payment|complete the (?:\$?\d+ )?payment|"
+            r"payment (?:is |gets )?(?:confirmed|processed|done|through)|once (?:it'?s|you'?ve) paid|click to (?:complete|pay)",
+            text, re.I):
+        return "everything is already paid, confirmed by PayPal: never ask for or wait for payment again."
+    if me["role"] == "freelancer" and parts and all(p["paid"] for p in parts) and re.search(
+            r"once (?:the |your )?payment|once (?:it'?s|you'?ve) paid|after (?:you )?pay|complete the .{0,20}payment|"
+            r"when (?:the )?payment|payment is (?:confirmed|processed|done)|click to (?:complete|pay)", text, re.I):
+        return "everything is already paid: never ask for or wait for a payment."
     if me["role"] == "client" and CLIENT_INVOICES.search(text):
         return "the freelancer makes the invoice and the PayPal button appears on the deal card; you only pay."
     if me["role"] == "client" and re.search(r"\b(?:hit|click|press|use)\s+the\s+paypal\s+button\b", text, re.I) \
@@ -236,6 +245,63 @@ def _deliver(conn, room, me, cfg):
     return D.save(conn, room, me, Upload())
 
 
+DESIGN = ("You are a thumbnail designer making a revision. From the agreed terms and the client's requests, choose the "
+          "design. Reply JSON only: {\"background\": \"#RRGGBB\", \"lines\": [up to 3 short title lines, exactly the "
+          "words the client asked for if they asked for a text], \"text_color\": \"#RRGGBB\"}. Pick colours that read well.")
+
+
+def _draw_revision(conn, room, me, cfg) -> int | None:
+    """Rafael's revision: the same dog, with the background and the title the client asked for."""
+    from PIL import Image, ImageDraw, ImageFont
+    import io
+    t = T.latest(conn, room["id"])["data"]
+    asks = "\n".join(f"- {m['text']}" for m in R.thread_text(conn, room, limit=30) if m["name"] != me["name"])
+    out = llm.ask(DESIGN, f"Terms: {json.dumps({k: t.get(k) for k in ('item', 'deliverables')})}\nClient said:\n{asks}",
+                  task="smart", max_tokens=200) or {}
+    hexc = lambda v, d: v if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v) else d
+    bg, fg = hexc(out.get("background"), "#FFD23F"), hexc(out.get("text_color"), "#141414")
+    lines = [str(x)[:16].upper() for x in (out.get("lines") or ["MY DOG"])][:3]
+    W, H = 1280, 720
+    im = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(im)
+    fur, dark = (214, 160, 98), (120, 78, 40)
+    d.ellipse([820, 180, 1160, 520], fill=fur); d.ellipse([770, 200, 880, 440], fill=dark)
+    d.ellipse([1100, 200, 1210, 440], fill=dark); d.ellipse([900, 300, 940, 340], fill=(30, 30, 30))
+    d.ellipse([1040, 300, 1080, 340], fill=(30, 30, 30)); d.ellipse([950, 360, 1030, 440], fill=(40, 30, 30))
+    path = str(db.ROOT / "dealroom" / "fonts" / "DejaVuSans-Bold.ttf")
+    size = 110 if max(len(x) for x in lines) <= 9 else 80
+    f = ImageFont.truetype(path, size)
+    y = (H - len(lines) * (size + 20)) // 2
+    for line in lines:
+        d.text((70, y), line, fill=fg, font=f)
+        y += size + 20
+    buf = io.BytesIO(); im.save(buf, "PNG")
+    n = db.one(conn, "SELECT COUNT(*) c FROM delivery WHERE room_id=?", room["id"])["c"] + 1
+
+    class Upload:
+        filename = f"thumbnail_v{n}.png"
+
+        def read(self):
+            return buf.getvalue()
+    return D.save(conn, room, me, Upload())
+
+
+def _wants_revision(conn, room, me, cfg) -> bool:
+    """A freelancer AI revises when its last file failed the check, the client spoke since, and revisions remain."""
+    if me["role"] != "freelancer" or "delivers" not in cfg:
+        return False
+    dv = D.latest(conn, room["id"])
+    t = T.latest(conn, room["id"])
+    if not dv or not t or not any(c["result"] == "no" for c in dv["check"].get("checks") or []):
+        return False
+    done = db.one(conn, "SELECT COUNT(*) c FROM delivery WHERE room_id=?", room["id"])["c"] - 1
+    last = db.one(conn, "SELECT MAX(m.id) m FROM message m JOIN person p ON p.id=m.sender_id WHERE m.room_id=? "
+                        "AND m.kind='chat' AND p.id!=?", room["id"], me["id"])["m"] or 0
+    since = db.one(conn, "SELECT MAX(id) m FROM message WHERE room_id=? AND kind='chat' AND data LIKE ?", room["id"],
+                   f'%"delivery_id": {dv["id"]}%')["m"] or 0   # the file itself in the chat, not the notes about it
+    return last > since and done < int(t["data"].get("revisions") or 0)
+
+
 def react(conn, lock, room_id: int, event: str):
     """Run the AI person's turn in the background, so nobody's screen waits for the AI."""
     first = R.get(conn, room_id)   # callers hold the lock; no thread at all for rooms without an AI person
@@ -250,7 +316,11 @@ def react(conn, lock, room_id: int, event: str):
             key, cfg, me = who(conn, room)
             t = T.latest(conn, room_id)
             if event == "message":
-                _reply(conn, room, lock)
+                if _wants_revision(conn, room, me, cfg) and _draw_revision(conn, room, me, cfg):
+                    _reply(conn, room, lock, "You just uploaded a revised file on the deal card, made from what the client "
+                                             "asked. Say so in one sentence and ask them to check it. Everything is paid.")
+                else:
+                    _reply(conn, room, lock)
             elif event == "terms" and t and not t["agreed"]:
                 fair = cfg["fair"](t["data"])
                 if fair:

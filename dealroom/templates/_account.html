@@ -13,6 +13,10 @@
     </div>
   </div>
   <span class="me"><span class="avatar sm" aria-hidden="true">{{ me.name[0] }}</span>{{ me.name }} <span class="role">{{ me.role }}</span></span>
+  {% set other = 'alex' if me.key == 'maya' else 'maya' %}
+  <form method="post" action="{{ url_for('login', key=other) }}" class="switch">
+    <button type="submit">{{ 'Switch to client (Alex)' if me.key == 'maya' else 'Switch to freelancer (Maya)' }}</button>
+  </form>
   <a class="logout" href="{{ url_for('home') }}">Log out</a>
 </nav>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

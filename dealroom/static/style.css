@@ -176,3 +176,9 @@ details.problem { border-top: 1px solid var(--line); padding-top: 12px; }
   .account .tab { padding: 6px 8px; }
   .top { flex-wrap: wrap; }
 }
+
+/* switch between the two demo accounts, same private copy */
+.account .switch { margin: 0; }
+.account .switch button { font: inherit; font-size: 13.5px; font-weight: 600; color: var(--blue, #2546D6); background: #EAEFFE;
+  border: 1px solid #C9D3F7; border-radius: 9px; padding: 6px 11px; cursor: pointer; white-space: nowrap; }
+.account .switch button:hover { background: #DCE4FD; }
