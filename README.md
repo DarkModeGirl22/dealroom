@@ -1,5 +1,9 @@
 # DealRoom
 
+[![Watch the DealRoom demo](https://img.youtube.com/vi/SPwqDmCpDDU/hqdefault.jpg)](https://www.youtube.com/watch?v=SPwqDmCpDDU)
+
+**▶ [Watch the DealRoom demo on YouTube](https://www.youtube.com/watch?v=SPwqDmCpDDU)**
+
 *Protection for everyone who buys or sells digital work through PayPal: every message, payment and delivery is recorded, so if you did nothing wrong, the record proves it.*
 
 **Try it: https://dealroom-v4uu.onrender.com** · two demo accounts, one click each, no sign-up. The free server can take up to a minute to wake up.
